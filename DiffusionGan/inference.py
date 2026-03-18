@@ -414,7 +414,7 @@ class AdversarialIRLDiffusionInference:
         
         return result_stats
 
-    def inference_adversarial(self, render_to_video=True, render_to_img=False):
+    def inference_adversarial(self, render_to_video=True, render_to_img=False, render_cfg=None):
         """
         Main adversarial inference loop
         Using learned reward to guide the generation of Diffusion models
@@ -427,13 +427,14 @@ class AdversarialIRLDiffusionInference:
         self.update_diffusion_model_with_reward()
 
         # run inference with rendering
-        render_cfg = {
-            'size': 400,
-            'px_per_m': 2.0,
-            'save_every_n_frames': 5,
-            'draw_mode': 'action',
-        }
-        
+        if render_cfg is None:
+            render_cfg = {
+                'size': 400,
+                'px_per_m': 2.0,
+                'save_every_n_frames': 5,
+                'draw_mode': 'action',
+            }
+
         return self.run_and_save_results(
             render_to_video=render_to_video,
             render_to_img=render_to_img,
