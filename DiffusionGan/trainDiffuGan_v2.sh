@@ -15,10 +15,10 @@ source ~/anaconda3/etc/profile.d/conda.sh
 conda activate bg3.9
 
 # Change to the project directory
-cd $HOME/CTGTest
+cd $HOME/CTG-Test
 
-# Set PYTHONPATH to include both CTG and the current directory
-export PYTHONPATH=$HOME/CTGTest/CTG/:$HOME/CTGTest:$PYTHONPATH
+# Set PYTHONPATH to include CTG, Pplan, and the current directory
+export PYTHONPATH=$HOME/CTG-Test/CTG/:$HOME/CTG-Test/Pplan:$HOME/CTG-Test:$PYTHONPATH
 
 export WANDB_APIKEY=fca5ee0f0b5f26a561e73544b04d48a96daa94b4
 
