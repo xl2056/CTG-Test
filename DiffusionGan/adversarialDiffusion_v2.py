@@ -302,7 +302,7 @@ class AdversarialIRLDiffusionV2:
 
             # --- D step: retrain reward model ---
             d_log = self.retrain_reward_model(features, n_epochs=d_epochs,
-                                              d_batch_size=d_batch_size)
+                                              batch_size=d_batch_size)
 
             # --- Evaluate & log ---
             self._evaluate_iteration(iteration, features, d_log)
