@@ -51,12 +51,33 @@ def load_v2_model(model_path: str, device: torch.device):
 # ──────────────────────────────────────────────
 # 2. Linear IRL Baseline
 # ──────────────────────────────────────────────
+def _patch_missing_keys(features: List[Any], feature_names: List[str]):
+    """Fill in missing feature keys with zero arrays so linear IRL won't crash."""
+    patched = 0
+    for scene_data in features:
+        for frame_data in scene_data:
+            ff = frame_data.get("frame_features", {})
+            for bucket in ("agent_rollout_features", "agent_ground_truth_features"):
+                agent_feats = ff.get(bucket, {})
+                for agent_id, val in agent_feats.items():
+                    dicts = val if isinstance(val, list) else [val]
+                    for d in dicts:
+                        for name in feature_names:
+                            if name not in d:
+                                d[name] = np.array([0.0])
+                                patched += 1
+    if patched:
+        print(f"  Patched {patched} missing feature entries with zeros")
+
+
 def train_linear_baseline(features: List[Any], feature_names: List[str],
                           n_iters: int = 200) -> Tuple[np.ndarray, Dict]:
     """Train a linear MaxEnt IRL model on the same feature data."""
     print("\n" + "=" * 50)
     print("Training linear IRL baseline ...")
     print("=" * 50)
+
+    _patch_missing_keys(features, feature_names)
 
     irl = MaxEntIRL(feature_names=feature_names, n_iters=n_iters)
     theta, training_log = irl.fit(features)
