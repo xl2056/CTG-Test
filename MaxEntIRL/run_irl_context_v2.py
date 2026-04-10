@@ -48,9 +48,13 @@ class ContextIRLDatasetV2(Dataset):
             "valid_samples": 0,
             "skipped_no_context": 0,
             "skipped_zero_map": 0,
+            "skipped_rollout_mismatch": 0,
             "avg_neighbors": [],
             "num_rollouts": []
         }
+
+        # 期望的 rollout 数（由首个有效样本确定，用于过滤数量不一致的样本）
+        self._expected_rollouts = None
         
         # 解析特征文件
         self._parse_features(features, verbose)
@@ -101,7 +105,15 @@ class ContextIRLDatasetV2(Dataset):
                     if map_sum < 1.0:  # 几乎全零
                         self.stats["skipped_zero_map"] += 1
                         continue
-                    
+
+                    # 确保所有样本的 rollout 数一致（否则 DataLoader 会崩）
+                    n_rollouts = len(rollout_feats)
+                    if self._expected_rollouts is None:
+                        self._expected_rollouts = n_rollouts
+                    elif n_rollouts != self._expected_rollouts:
+                        self.stats["skipped_rollout_mismatch"] += 1
+                        continue
+
                     # 有效样本
                     sample = {
                         "gt_features": self._convert_to_vector(gt_feat),
@@ -110,17 +122,23 @@ class ContextIRLDatasetV2(Dataset):
                         "agent_id": agent_id
                     }
                     self.samples.append(sample)
-                    
+
                     self.stats["valid_samples"] += 1
-                    self.stats["num_rollouts"].append(len(rollout_feats))
+                    self.stats["num_rollouts"].append(n_rollouts)
                     self.stats["avg_neighbors"].append(agent_context.get("num_neighbors", 0))
     
     def _convert_to_vector(self, feat_dict) -> np.ndarray:
-        """将特征字典转换为向量"""
+        """将特征字典转换为向量（容错：缺失key/空数组/NaN -> 0.0）"""
         vec = []
         for name in self.feature_names:
-            arr = np.asarray(feat_dict[name])
-            vec.append(float(np.mean(arr)) if arr.size > 0 else 0.0)
+            arr = np.asarray(feat_dict.get(name, [0.0]))
+            if arr.size > 0:
+                val = float(np.mean(arr))
+                if not np.isfinite(val):
+                    val = 0.0
+            else:
+                val = 0.0
+            vec.append(val)
         return np.array(vec, dtype=np.float32)
     
     def _compute_normalization(self):
@@ -194,6 +212,9 @@ class ContextIRLDatasetV2(Dataset):
         print(f"有效样本数: {self.stats['valid_samples']}")
         print(f"跳过（无上下文）: {self.stats['skipped_no_context']}")
         print(f"跳过（零地图）: {self.stats['skipped_zero_map']}")
+        print(f"跳过（rollout数不一致）: {self.stats.get('skipped_rollout_mismatch', 0)}")
+        if self._expected_rollouts is not None:
+            print(f"期望 rollout 数: {self._expected_rollouts}")
         if self.stats['avg_neighbors']:
             print(f"平均邻居数: {np.mean(self.stats['avg_neighbors']):.2f}")
         if self.stats['num_rollouts']:

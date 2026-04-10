@@ -334,6 +334,16 @@ class IRLFeatureExtractor:
                 print(f"      Failed to generate rollout {rollout_idx}")
 
         print(f"    Generated {len(rollouts)} valid rollouts out of {self.config.num_rollouts} attempts")
+
+        # Guarantee uniform rollout counts across saved frames. Downstream
+        # batching (ContextIRLDatasetV2 + DataLoader) requires every sample
+        # to carry the same number of rollouts, so we drop frames that
+        # couldn't produce the full requested count.
+        if len(rollouts) < self.config.num_rollouts:
+            print(f"    Skipping frame {start_frame}: only "
+                  f"{len(rollouts)}/{self.config.num_rollouts} rollouts succeeded")
+            return [], None
+
         # Step 3: Extract trajectories from rollouts
         rollout_trajectories = self._extract_trajectories_from_rollouts(rollouts)
 
@@ -806,27 +816,42 @@ class IRLFeatureExtractor:
             # print(f"    Agent {dyn_aid}: Avg THW - Front: {avg_front:.1f}s, Left: {avg_left:.1f}s, Right: {avg_right:.1f}s")
 
         
-        # Step 9: Assemble features for each dynamic agent
+        # Step 9: Assemble features for each dynamic agent.
+        # Always write all 7 feature keys so downstream code can rely on their
+        # presence. Empty / short-trajectory cases fall back to [0.0] so
+        # np.mean() produces 0.0 instead of NaN.
+        def _safe_row(arr, row_idx):
+            if arr.shape[1] == 0:
+                return np.array([0.0], dtype=np.float32)
+            row = arr[row_idx]
+            return row if row.size > 0 else np.array([0.0], dtype=np.float32)
+
+        def _safe_thw(arr, row_idx):
+            if TT == 0:
+                return np.array([0.0], dtype=np.float32)
+            row = arr[row_idx]
+            return row if row.size > 0 else np.array([0.0], dtype=np.float32)
+
         agent_features = {}
-        for i, aid in enumerate(valid_dynamic_agents):  # Fix: use valid_dynamic_agents directly
+        for i, aid in enumerate(valid_dynamic_agents):
             feats = {}
-            
-            if 'velocity' in feature_names and speed.shape[1] > 0:
-                feats['velocity'] = speed[i]
-            if 'a_long' in feature_names and a_long.shape[1] > 0:
-                feats['a_long'] = a_long[i]
-            if 'jerk_long' in feature_names and jerk.shape[1] > 0:
-                feats['jerk_long'] = jerk[i]
-            if 'a_lateral' in feature_names and a_lat.shape[1] > 0:
-                feats['a_lateral'] = a_lat[i]
-            
-            # Time Headway features
-            if 'front_thw' in feature_names and TT > 0:
-                feats['front_thw'] = front_exp_thw_all[i]
-            if 'left_thw' in feature_names and TT > 0:
-                feats['left_thw'] = left_exp_thw_all[i]
-            if 'right_thw' in feature_names and TT > 0:
-                feats['right_thw'] = right_exp_thw_all[i]
+
+            if 'velocity' in feature_names:
+                feats['velocity'] = _safe_row(speed, i)
+            if 'a_long' in feature_names:
+                feats['a_long'] = _safe_row(a_long, i)
+            if 'jerk_long' in feature_names:
+                feats['jerk_long'] = _safe_row(jerk, i)
+            if 'a_lateral' in feature_names:
+                feats['a_lateral'] = _safe_row(a_lat, i)
+
+            # Time Headway features (always written)
+            if 'front_thw' in feature_names:
+                feats['front_thw'] = _safe_thw(front_exp_thw_all, i)
+            if 'left_thw' in feature_names:
+                feats['left_thw'] = _safe_thw(left_exp_thw_all, i)
+            if 'right_thw' in feature_names:
+                feats['right_thw'] = _safe_thw(right_exp_thw_all, i)
 
             agent_features[aid] = feats
     
