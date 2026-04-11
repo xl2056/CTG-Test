@@ -494,6 +494,24 @@ class AdversarialIRLDiffusionInference:
         # apply learned reward as guidance
         self.update_diffusion_model_with_reward()
 
+        # Wipe any stale HDF5 buffer dump from previous (possibly failed) runs.
+        # dump_episode_buffer opens the file in append mode and calls
+        # create_dataset with a fixed "/<scene>_<start_frame>/<metric>" key, so
+        # leftover keys from a previous crash would cause
+        #   ValueError: Unable to synchronously create link (name already exists)
+        # in h5py. Starting from an empty file sidesteps the issue and matches
+        # the expectation that each inference run overwrites its own artifacts.
+        if os.path.exists(self.hdf5_path):
+            try:
+                os.remove(self.hdf5_path)
+                print(f"[inference] Removed stale HDF5 buffer at {self.hdf5_path}")
+            except OSError as e:
+                print(
+                    f"[inference] Warning: could not remove stale HDF5 buffer "
+                    f"{self.hdf5_path}: {e}. dump_episode_buffer may fail on "
+                    f"name collisions."
+                )
+
         # run inference with rendering
         render_cfg = {
             'size': 400,
