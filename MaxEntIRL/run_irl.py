@@ -296,6 +296,47 @@ class MaxEntIRL:
         self.theta = theta
         return theta, training_log
 
+    def _sync_map_shape_from_features(self, features: List[Any]) -> None:
+        """
+        Peek at the first frame that has a context image and copy its channel
+        count / spatial size into self.config.weight_network so the encoder is
+        built to match the real data instead of the (3, 224, 224) default.
+        """
+        wn_cfg = getattr(self.config, "weight_network", None)
+        if wn_cfg is None:
+            return
+        for scene_data in features:
+            for frame_entry in scene_data:
+                ctx = frame_entry.get("context") if isinstance(frame_entry, dict) else None
+                if not ctx:
+                    continue
+                img = ctx.get("image")
+                if img is None:
+                    continue
+                arr = np.asarray(img)
+                # trajdata stores image as (N_agents, C, H, W); drop leading dims
+                # until we reach (C, H, W).
+                while arr.ndim > 3:
+                    arr = arr[0]
+                if arr.ndim != 3:
+                    return
+                c, h, w = int(arr.shape[0]), int(arr.shape[1]), int(arr.shape[2])
+                old_c = getattr(wn_cfg, "map_channels", None)
+                old_hw = getattr(wn_cfg, "map_image_hw", None)
+                if old_c != c or old_hw != h:
+                    print(
+                        f"[MaxEntIRL] Inferred map raster shape from features: "
+                        f"C={c}, H={h}, W={w} (was C={old_c}, HW={old_hw}). "
+                        f"Rebuilding WeightNetwork with the correct shape."
+                    )
+                    wn_cfg.map_channels = c
+                    wn_cfg.map_image_hw = h
+                    # Invalidate any previously-built encoder so it gets rebuilt
+                    # with the new shape.
+                    self.weight_net = None
+                    self.optimizer = None
+                return
+
     def _fit_weight_network(self, features: List[Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """
         PyTorch training loop for context-conditional w_theta(c).
@@ -308,6 +349,10 @@ class MaxEntIRL:
             loss_i = -(reward_expert - log_Z)
         Total loss = mean over (frame, agent) pairs + L2 regularization.
         """
+        # Infer the actual BEV raster shape from the first available context so
+        # the map encoder is built with the right in_channels (trajdata emits
+        # multi-layer rasters, not 3-channel RGB).
+        self._sync_map_shape_from_features(features)
         self._ensure_weight_net()
 
         # Pre-pack all (frame -> torch context, list of (feat_rollouts, feat_expert))
