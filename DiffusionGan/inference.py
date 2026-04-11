@@ -127,7 +127,13 @@ class AdversarialIRLDiffusionInference:
                     filtered.append(reward_guidance)
                     new_scenes_cfg.append(filtered)
                 eval_cfg.edits.guidance_config = new_scenes_cfg
-                print(f"Applied reward guidance with weights: {reward_guidance['params']['reward_weights']}")
+                params = reward_guidance['params']
+                if 'weight_net_ckpt' in params:
+                    print(f"Applied reward guidance via weight network ckpt: {params['weight_net_ckpt']}")
+                elif 'reward_weights' in params:
+                    print(f"Applied reward guidance with weights: {params['reward_weights']}")
+                else:
+                    print("Applied reward guidance (no weights metadata)")
 
     def update_diffusion_model_with_reward(self):
         """Update diffusion model using learned reward as guidance (Generator step)"""
