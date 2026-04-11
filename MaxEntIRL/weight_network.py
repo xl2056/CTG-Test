@@ -141,8 +141,10 @@ class WeightNetwork(nn.Module):
                 extent = context["extent"].to(device).float()
                 avail = context.get("history_availabilities")
                 if avail is None:
-                    avail = torch.ones_like(speed)
-                avail = avail.to(device).float()
+                    avail = torch.ones_like(speed, dtype=torch.bool)
+                # AgentHistoryEncoder.prepare_hist_in does `hist_in[~avail] = 0`,
+                # which requires a boolean tensor. Features are saved as float.
+                avail = avail.to(device).bool()
                 ego_feat = self.ego_encoder(pos, yaw, speed, extent, avail)
                 batch_size = ego_feat.shape[0] if batch_size is None else batch_size
                 feats.append(ego_feat)
@@ -163,8 +165,10 @@ class WeightNetwork(nn.Module):
                 extent = context["all_other_agents_extents"].to(device).float()
                 avail = context.get("all_other_agents_history_availabilities")
                 if avail is None:
-                    avail = torch.ones_like(speed)
-                avail = avail.to(device).float()
+                    avail = torch.ones_like(speed, dtype=torch.bool)
+                # See ego branch: availability must be a bool tensor for
+                # prepare_hist_in's `~avail` masking step.
+                avail = avail.to(device).bool()
                 nbr_feat = self.nbr_encoder(pos, yaw, speed, extent, avail)
                 batch_size = nbr_feat.shape[0] if batch_size is None else batch_size
                 feats.append(nbr_feat)
