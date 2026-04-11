@@ -43,6 +43,11 @@ class AdversarialIRLDiffusionInference:
         """Setup environment and models"""
         # Build SceneEditingConfig similarly to extract_features.__main__
         cfg = SceneEditingConfig(registered_name="trajdata_nusc_diff")
+        # Override trajdata split from IRL config (default: nusc_trainval-train).
+        # Must happen before the hoist loop below pops cfg.trajdata.
+        if hasattr(cfg, "trajdata") and hasattr(self.config, "trajdata_source_test"):
+            cfg.trajdata.trajdata_source_test = list(self.config.trajdata_source_test)
+            print(f"[inference] Using trajdata split: {cfg.trajdata.trajdata_source_test}")
         # Apply CLI-like overrides from default_config
         if hasattr(self.config, "eval_class"):
             cfg.eval_class = self.config.eval_class

@@ -952,9 +952,15 @@ if __name__ == "__main__":
               set edits automatically based on heuristics. If none, does not use edits."
     )
 
-    args = parser.parse_args()    
+    args = parser.parse_args()
     cfg = SceneEditingConfig(registered_name=args.registered_name)
-    
+
+    # Override trajdata split from IRL config (default: nusc_trainval-train).
+    # Must happen before the env-specific hoist loop below pops cfg.trajdata.
+    if hasattr(cfg, "trajdata") and hasattr(default_config, "trajdata_source_test"):
+        cfg.trajdata.trajdata_source_test = list(default_config.trajdata_source_test)
+        print(f"[extract_features] Using trajdata split: {cfg.trajdata.trajdata_source_test}")
+
     # Set evaluation class
     if args.eval_class is not None:
         cfg.eval_class = args.eval_class

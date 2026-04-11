@@ -57,6 +57,9 @@ class FeatureExtractionConfig:
     # Scene selection
     scene_location: str = "singapore" # Options: 'boston', 'singapore'
     num_scenes_to_evaluate: int = 10
+
+    # trajdata split to read ("nusc_trainval-train" has 850 scenes, "-val" has 150)
+    trajdata_source_test: List[str] = field(default_factory=lambda: ["nusc_trainval-train"])
     
     eval_scenes: List[int] = field(default_factory=list)
     num_scenes_per_batch: int = 1
