@@ -48,7 +48,7 @@ class FeatureExtractionConfig:
     
     # Output settings
     output_dir: str = "./MaxEntIRL/irl_output"
-    save_features: bool = False  # Whether to save extracted features
+    save_features: bool = True  # Whether to save extracted features
 
     # feature names
     feature_names: List[str] = field(default_factory=lambda: 

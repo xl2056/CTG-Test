@@ -215,13 +215,17 @@ def build_weight_network_from_config(cfg) -> WeightNetwork:
             return wn_cfg.get(key, default)
         return getattr(wn_cfg, key, default)
 
+    num_history_steps = _g("num_history_steps", None)
+    if num_history_steps is None:
+        num_history_steps = cfg.history_num_frames + 1
+
     return WeightNetwork(
         feature_dim=len(cfg.feature_names),
         map_feat_dim=_g("map_feat_dim", 128),
         nbr_feat_dim=_g("nbr_feat_dim", 128),
         ego_feat_dim=_g("ego_feat_dim", 64),
         mlp_hidden=_g("mlp_hidden", [128]),
-        num_history_steps=_g("num_history_steps", cfg.history_num_frames + 1),
+        num_history_steps=num_history_steps,
         map_channels=_g("map_channels", 3),
         map_image_hw=_g("map_image_hw", 224),
         map_arch=_g("map_arch", "resnet18"),
