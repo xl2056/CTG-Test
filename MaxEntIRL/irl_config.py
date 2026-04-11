@@ -3,6 +3,41 @@ import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 
+
+@dataclass
+class WeightNetworkConfig:
+    """Configuration for the context-conditional weight network w_theta(c)."""
+
+    # Enable/disable streams
+    use_map: bool = True
+    use_neighbors: bool = True
+    use_ego: bool = True
+
+    # Per-stream embedding dimensions
+    map_feat_dim: int = 128
+    nbr_feat_dim: int = 128
+    ego_feat_dim: int = 64
+
+    # Head MLP hidden dims (input/output are added automatically)
+    mlp_hidden: List[int] = field(default_factory=lambda: [128])
+
+    # Map encoder params
+    map_arch: str = "resnet18"
+    map_channels: int = 3
+    map_image_hw: int = 224
+
+    # Optional tanh-scaled output for stability (None = unconstrained)
+    weight_scale: Optional[float] = None
+
+    # Optimizer settings
+    lr: float = 3e-4
+    l2: float = 1e-4
+
+    # Optional override for ego/neighbor history length; if None use
+    # (config.history_num_frames + 1).
+    num_history_steps: Optional[int] = None
+
+
 @dataclass
 class FeatureExtractionConfig:
     """Configuration for IRL feature extraction"""
@@ -54,7 +89,15 @@ class FeatureExtractionConfig:
     seed: int = 42
     
     # minimum remaining steps for rollouts
-    min_remaining_steps: int = 50    
+    min_remaining_steps: int = 50
+
+    ############### Parameters for the context-conditional weight network
+    # When False, IRL falls back to the legacy fixed-theta numpy implementation.
+    use_weight_network: bool = True
+    # Whether extract_features.py should dump per-frame context tensors
+    # (image + ego/neighbor history slices) into the features pkl.
+    save_context: bool = True
+    weight_network: WeightNetworkConfig = field(default_factory=WeightNetworkConfig)
 
 
     ############### Parameters for adversarial training

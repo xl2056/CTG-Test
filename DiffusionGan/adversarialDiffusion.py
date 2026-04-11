@@ -20,7 +20,8 @@ class AdversarialIRLDiffusion:
         self.theta_ema = None # EMA of theta for stability
         self.irl_norm_mean = None
         self.irl_norm_std = None
-        
+        self._weight_net_ckpt = None  # Latest weight network checkpoint path
+
         # Initialize wandb
         if self.config.use_wandb:
             self.init_wandb()
@@ -98,13 +99,16 @@ class AdversarialIRLDiffusion:
             # Step 2: Update reward function using MaxEnt IRL (Discriminator)
             self.current_theta = self.get_reward_via_irl(generated_features)
 
-            # Maintain an EMA of theta for smoother guidance
+            # Maintain an EMA of theta for smoother guidance (legacy path only;
+            # weight network checkpoints are overwritten each iteration).
             beta = self.config.theta_ema_beta
-            if self.current_theta is not None:
+            if self.current_theta is not None and not isinstance(self.current_theta, dict):
                 if self.theta_ema is None:
                     self.theta_ema = np.array(self.current_theta, dtype=float)
                 else:
-                    self.theta_ema = beta * self.theta_ema + (1.0 - beta) * np.array(self.current_theta, dtype=float)
+                    self.theta_ema = beta * self.theta_ema + (1.0 - beta) * np.array(
+                        self.current_theta, dtype=float
+                    )
 
             # Step 3: Apply learned reward as guidance
             if iteration < num_iterations - 1:
@@ -113,7 +117,7 @@ class AdversarialIRLDiffusion:
             # Step 4: Evaluate and log progress
             self.evaluate_iteration(generated_features, iteration)
 
-        return self.current_theta, self.irl_norm_mean, self.irl_norm_std
+        return self.current_theta, self.irl_norm_mean, self.irl_norm_std, self._weight_net_ckpt
     
     def generate_trajectories_with_current_model(self):
         """Generate trajectories using current diffusion model state"""
@@ -126,34 +130,81 @@ class AdversarialIRLDiffusion:
         return features
 
     def get_reward_via_irl(self, generated_features):
-        """Update reward function using MaxEnt IRL (Discriminator step)"""
-        print("Updating reward function using MaxEnt IRL...")        
-        
+        """Update reward function using MaxEnt IRL (Discriminator step).
+
+        Returns the learned artifact. When the weight network is enabled this
+        is a dict with `weight_net_state_dict`; otherwise it is the legacy
+        theta numpy vector.
+        """
+        print("Updating reward function using MaxEnt IRL...")
+
         # Run MaxEnt IRL to learn reward
         features_list = list(generated_features.values())
-        irl = MaxEntIRL(feature_names=self.config.feature_names, n_iters=self.config.num_iterations)
-        learned_theta, training_log = irl.fit(features_list)
-        
-        # Log IRL training progress to wandb
+        irl = MaxEntIRL(
+            feature_names=self.config.feature_names,
+            n_iters=self.config.num_iterations,
+            config=self.config,
+        )
+        learned_artifact, training_log = irl.fit(features_list)
+
+        # Persist the most recent trained weight network checkpoint so the
+        # guidance loader can reference it on the next iteration.
+        if isinstance(learned_artifact, dict) and "weight_net_state_dict" in learned_artifact:
+            weights_dir = os.path.join(self.config.output_dir, "weights")
+            os.makedirs(weights_dir, exist_ok=True)
+            ckpt_path = os.path.join(weights_dir, f"weight_net_{self.config.scene_location}.pt")
+            irl.save_results(
+                learned_artifact,
+                training_log,
+                path=ckpt_path,
+                norm_mean=irl.norm_mean,
+                norm_std=irl.norm_std,
+            )
+            self._weight_net_ckpt = ckpt_path
+        else:
+            self._weight_net_ckpt = None
+
+        # Log IRL training progress to wandb (schema depends on mode)
         if self.config.use_wandb:
-            for i, (log_likelihood, feature_diff, human_likeness) in enumerate(zip(
-                training_log["average_log-likelihood"],
-                training_log["average_feature_difference"], 
-                training_log["average_human_likeness"]
-            )):
-                wandb.log({
-                    "irl/log_likelihood": log_likelihood,
-                    "irl/feature_difference": feature_diff,
-                    "irl/human_likeness": human_likeness,
-                    "irl/iteration": i + 1
-                }, commit=False)
-        
+            ll_list = training_log.get("average_log-likelihood", [])
+            if "average_feature_difference" in training_log:
+                # Legacy theta path
+                for i, (log_likelihood, feature_diff, human_likeness) in enumerate(zip(
+                    ll_list,
+                    training_log.get("average_feature_difference", []),
+                    training_log.get("average_human_likeness", []),
+                )):
+                    wandb.log({
+                        "irl/log_likelihood": log_likelihood,
+                        "irl/feature_difference": feature_diff,
+                        "irl/human_likeness": human_likeness,
+                        "irl/iteration": i + 1,
+                    }, commit=False)
+            else:
+                # Weight network path
+                for i, (log_likelihood, loss, w_norm, human_likeness) in enumerate(zip(
+                    ll_list,
+                    training_log.get("loss", []),
+                    training_log.get("average_weight_norm", []),
+                    training_log.get("average_human_likeness", []),
+                )):
+                    wandb.log({
+                        "irl/log_likelihood": log_likelihood,
+                        "irl/loss": loss,
+                        "irl/weight_norm": w_norm,
+                        "irl/human_likeness": human_likeness,
+                        "irl/iteration": i + 1,
+                    }, commit=False)
+
         # capture normalization stats for guidance
         self.irl_norm_mean = irl.norm_mean
         self.irl_norm_std = irl.norm_std
-        print(f"Learned reward weights: {learned_theta}")
-        
-        return learned_theta
+        if isinstance(learned_artifact, dict):
+            print("Learned reward via weight network (state dict saved).")
+        else:
+            print(f"Learned reward weights: {learned_artifact}")
+
+        return learned_artifact
 
     def update_diffusion_model_with_reward(self):
         """Update diffusion model using learned reward as guidance (Generator step)"""
@@ -166,30 +217,40 @@ class AdversarialIRLDiffusion:
         self.apply_reward_guidance(reward_guidance)
     
     def convert_reward_to_guidance(self):
-        """Convert learned reward weights to diffusion guidance"""
-        if self.current_theta is None:
-            return None        
-        
-        # Use EMA weights for stability (fallback to current if ema missing)
-        theta = self.theta_ema if self.theta_ema is not None else np.array(self.current_theta, dtype=float)
-        
-        # Define feature names to match your IRL features
+        """Convert learned reward weights to diffusion guidance.
+
+        Two shapes are produced depending on which IRL mode was used:
+        - legacy theta: `reward_weights` list + norm stats
+        - weight network: `weight_net_ckpt` path pointing at the saved .pt
+        """
+        if self.current_theta is None and self._weight_net_ckpt is None:
+            return None
+
         feature_names = self.config.feature_names
-               
-        # Create custom guidance based on learned reward
+
+        params = {
+            'feature_names': feature_names,
+            'dt': self.config.step_time,
+        }
+        if self.irl_norm_mean is not None:
+            params['norm_mean'] = self.irl_norm_mean.tolist()
+        if self.irl_norm_std is not None:
+            params['norm_std'] = self.irl_norm_std.tolist()
+
+        if self._weight_net_ckpt is not None:
+            params['weight_net_ckpt'] = self._weight_net_ckpt
+        else:
+            theta = self.theta_ema if self.theta_ema is not None else np.array(
+                self.current_theta, dtype=float
+            )
+            params['reward_weights'] = theta.tolist()
+
         reward_guidance = {
             'name': 'learned_reward_guidance',
             'weight': self.config.guidance_weight,
-            'params': {
-                'reward_weights': theta.tolist(), 
-                'feature_names': feature_names,
-                'dt': self.config.step_time,
-                'norm_mean': self.irl_norm_mean.tolist(),
-                'norm_std': self.irl_norm_std.tolist(),
-            },
-            'agents': None  # Apply to all agents
+            'params': params,
+            'agents': None,  # Apply to all agents
         }
-
         return reward_guidance
 
 
@@ -224,20 +285,24 @@ class AdversarialIRLDiffusion:
 
     def evaluate_iteration(self, generated_features, iteration):
         """Evaluate progress and log results"""
-        # Compute metrics to track training progress
+        legacy_theta = (
+            self.current_theta
+            if (self.current_theta is not None and not isinstance(self.current_theta, dict))
+            else None
+        )
+
         metrics = {
             'iteration': iteration,
-            'reward_weights': self.current_theta.copy() if self.current_theta is not None else None,
-            'reward_magnitude': np.linalg.norm(self.current_theta) if self.current_theta is not None else 0,
+            'reward_weights': legacy_theta.copy() if legacy_theta is not None else None,
+            'reward_magnitude': float(np.linalg.norm(legacy_theta)) if legacy_theta is not None else 0,
+            'weight_net_ckpt': self._weight_net_ckpt,
         }
-        
-        # Add trajectory quality metrics if available
+
         quality_metrics = self.compute_trajectory_quality_metrics(generated_features)
         metrics.update(quality_metrics)
-        
+
         self.training_history.append(metrics)
-        
-        # Log to wandb
+
         if self.config.use_wandb:
             wandb_metrics = {
                 "iteration": iteration,
@@ -247,11 +312,9 @@ class AdversarialIRLDiffusion:
                 "quality/expert_similarity": quality_metrics['expert_similarity'],
                 "quality/diversity": quality_metrics['diversity'],
             }
-            
-            # Log individual reward weights
-            if self.current_theta is not None:
-                for i, (weight, feature_name) in enumerate(zip(self.current_theta, self.config.feature_names)):
-                    wandb_metrics[f"theta/{feature_name}"] = weight
+            if legacy_theta is not None:
+                for i, (weight, feature_name) in enumerate(zip(legacy_theta, self.config.feature_names)):
+                    wandb_metrics[f"theta/{feature_name}"] = float(weight)
             wandb.log(wandb_metrics)
             
         # Save checkpoint
@@ -351,22 +414,24 @@ class AdversarialIRLDiffusion:
         return np.array(vals, dtype=float)
     
     def save_checkpoint(self, iteration):
-        """Save training checkpoint"""
+        """Save training checkpoint (summary of the adversarial run)."""
         if iteration == self.config.num_iterations - 1:
             checkpoint = {
                 'iteration': iteration,
-                'theta': self.current_theta,
+                'theta': self.current_theta
+                    if (self.current_theta is not None and not isinstance(self.current_theta, dict))
+                    else None,
+                'weight_net_ckpt': self._weight_net_ckpt,
                 'training_history': self.training_history,
             }
-            
-            # Create weights folder under output directory
+
             weights_dir = os.path.join(self.config.output_dir, "weights")
             os.makedirs(weights_dir, exist_ok=True)
 
             checkpoint_path = os.path.join(weights_dir, f"weights_{self.config.scene_location}.pkl")
             with open(checkpoint_path, 'wb') as f:
                 pickle.dump(checkpoint, f)
-            
+
             print(f"Checkpoint saved to {checkpoint_path}")
         
         
@@ -374,19 +439,24 @@ class AdversarialIRLDiffusion:
 if __name__ == "__main__":
     # Initialize adversarial trainer
     trainer = AdversarialIRLDiffusion(default_config)
-    
+
     # Setup environment
     trainer.setup_environment()
-    
+
     # Run adversarial training
-    final_theta, norm_mean, norm_std = trainer.train_adversarial(num_iterations=default_config.num_iterations)
-    
-    print(f"Final learned reward weights: {final_theta}")
-    
-    # Save final results
+    final_theta, norm_mean, norm_std, weight_net_ckpt = trainer.train_adversarial(
+        num_iterations=default_config.num_iterations
+    )
+
+    if weight_net_ckpt is not None:
+        print(f"Final weight network checkpoint: {weight_net_ckpt}")
+    else:
+        print(f"Final learned reward weights: {final_theta}")
+
     with open("adversarial_irl_results.pkl", "wb") as f:
         pickle.dump({
-            "final_theta": final_theta,
-            "norm_mean": norm_mean, 
-            "norm_std": norm_std
+            "final_theta": final_theta if not isinstance(final_theta, dict) else None,
+            "weight_net_ckpt": weight_net_ckpt,
+            "norm_mean": norm_mean,
+            "norm_std": norm_std,
         }, f)

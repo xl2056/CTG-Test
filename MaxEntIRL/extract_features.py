@@ -161,7 +161,7 @@ class IRLFeatureExtractor:
 
                 for start_frame in scene_start_frames:
                     print(f"\nProcessing scene {scene_idx}, start frame {start_frame}")
-                    
+
                     # Reset to this specific scene and start frame
                     scenes_valid = self.env.reset(scene_indices=[scene_idx], start_frame_index=[start_frame])
                     if not scenes_valid[0]:
@@ -169,23 +169,36 @@ class IRLFeatureExtractor:
                         torch.cuda.empty_cache()
                         continue
 
+                    # Capture context snapshot (map raster + ego/neighbor history)
+                    # for the weight network before generating any rollouts.
+                    frame_context = None
+                    if getattr(self.config, "save_context", False):
+                        try:
+                            frame_context = self._extract_frame_context()
+                        except Exception as e:
+                            print(f"    Warning: failed to extract frame context: {e}")
+                            frame_context = None
+
                     # Generate rollouts starting from this specific frame
                     rollout_trajectories, gt_trajectories = self._generate_rollouts_from_specific_frame(
-                        scene_idx, start_frame)                    
+                        scene_idx, start_frame)
 
                     if not rollout_trajectories or gt_trajectories is None:
                         print(f"    Warning: No data generated for frame {start_frame}")
                         torch.cuda.empty_cache()
                         continue
-                                
+
                     frame_features_data = self._process_frame_trajectories(
                         scene_idx, scene_name, start_frame, rollout_trajectories, gt_trajectories)
-                    
+
                     if frame_features_data:
-                        scene_features.append({
+                        entry = {
                             "start_frame": start_frame,
-                            "frame_features": frame_features_data
-                        })
+                            "frame_features": frame_features_data,
+                        }
+                        if frame_context is not None:
+                            entry["context"] = frame_context
+                        scene_features.append(entry)
 
                 # return features for current scene, and save if necessary
                 if scene_features:
@@ -832,6 +845,59 @@ class IRLFeatureExtractor:
     
         return agent_features
 
+
+    def _extract_frame_context(self):
+        """
+        Capture a snapshot of the current environment observation and keep the
+        fields needed by WeightNetwork (map raster + ego/neighbor history) as
+        cpu numpy arrays. Takes the first scene in the current env.
+
+        Returns dict with numpy arrays (float16 for image, float32 elsewhere)
+        or None if the observation cannot be obtained.
+        """
+        context_fields = [
+            "image",
+            "history_positions",
+            "history_yaws",
+            "history_speeds",
+            "history_availabilities",
+            "extent",
+            "all_other_agents_history_positions",
+            "all_other_agents_history_yaws",
+            "all_other_agents_history_speeds",
+            "all_other_agents_history_availabilities",
+            "all_other_agents_extents",
+        ]
+
+        try:
+            obs = self.env.get_observation()
+        except Exception as e:
+            print(f"    get_observation failed: {e}")
+            return None
+
+        if not isinstance(obs, dict) or "agents" not in obs:
+            return None
+        batch = obs["agents"]
+
+        snapshot = {}
+        for key in context_fields:
+            val = None
+            if isinstance(batch, dict):
+                val = batch.get(key)
+            else:
+                val = getattr(batch, key, None)
+            if val is None:
+                continue
+            if hasattr(val, "detach"):
+                val = val.detach().cpu().numpy()
+            arr = np.asarray(val)
+            # Use float16 for the map raster to save disk, float32 for the rest.
+            if key == "image":
+                arr = arr.astype(np.float16)
+            else:
+                arr = arr.astype(np.float32)
+            snapshot[key] = arr
+        return snapshot if snapshot else None
 
     def is_trajectory_dynamic(self, trajectory):
         """

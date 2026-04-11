@@ -2083,8 +2083,31 @@ class StayAwayLoss(GuidanceLoss):
 
 
 class LearnedRewardGuidance(GuidanceLoss):
-    def __init__(self, weight=1.0, reward_weights=None, feature_names=None, dt=0.1,
-                 norm_mean=None, norm_std=None):
+    """
+    Learned-reward guidance.
+
+    Supports two modes controlled by the constructor arguments:
+
+    1. Fixed-theta mode (legacy): pass `reward_weights` as a 1D sequence of
+       length F. The reward is r = theta^T * phi(s, a), shared across
+       scenes/agents.
+
+    2. Weight-network mode: pass `weight_net_ckpt` pointing at a torch
+       checkpoint saved by MaxEntIRL._fit_weight_network. On the first forward
+       call a WeightNetwork is rebuilt from the checkpoint and used to compute
+       per-scene weights from the data_batch context (image + history).
+    """
+
+    def __init__(
+        self,
+        weight=1.0,
+        reward_weights=None,
+        feature_names=None,
+        dt=0.1,
+        norm_mean=None,
+        norm_std=None,
+        weight_net_ckpt=None,
+    ):
         super().__init__()
         self.weight = float(weight)
         self.reward_weights = None if reward_weights is None else torch.as_tensor(
@@ -2095,31 +2118,143 @@ class LearnedRewardGuidance(GuidanceLoss):
         self.norm_mean = None if (norm_mean is None) else torch.as_tensor(norm_mean, dtype=torch.float32)
         self.norm_std = None if (norm_std is None) else torch.as_tensor(norm_std, dtype=torch.float32)
 
+        # Weight network mode state (lazily initialized on first forward).
+        self.weight_net_ckpt = weight_net_ckpt
+        self.weight_net = None
+        self._weight_net_loaded = False
+        self._weight_net_feature_names = None
+
+    def _load_weight_net(self, device):
+        if self._weight_net_loaded:
+            return
+        self._weight_net_loaded = True
+        if not self.weight_net_ckpt:
+            return
+        try:
+            from MaxEntIRL.weight_network import WeightNetwork
+        except Exception as e:
+            print(f"[LearnedRewardGuidance] Cannot import WeightNetwork: {e}")
+            return
+
+        try:
+            ckpt = torch.load(self.weight_net_ckpt, map_location=device)
+        except Exception as e:
+            print(f"[LearnedRewardGuidance] Failed to load ckpt {self.weight_net_ckpt}: {e}")
+            return
+
+        wn_cfg = ckpt.get("weight_network_config") or {}
+        feat_names = ckpt.get("feature_names") or self.feature_names
+        self._weight_net_feature_names = list(feat_names)
+        num_hist = wn_cfg.get("num_history_steps") or (
+            (ckpt.get("history_num_frames") or 20) + 1
+        )
+
+        self.weight_net = WeightNetwork(
+            feature_dim=len(feat_names),
+            map_feat_dim=wn_cfg.get("map_feat_dim", 128),
+            nbr_feat_dim=wn_cfg.get("nbr_feat_dim", 128),
+            ego_feat_dim=wn_cfg.get("ego_feat_dim", 64),
+            mlp_hidden=wn_cfg.get("mlp_hidden", [128]),
+            num_history_steps=num_hist,
+            map_channels=wn_cfg.get("map_channels", 3),
+            map_image_hw=wn_cfg.get("map_image_hw", 224),
+            map_arch=wn_cfg.get("map_arch", "resnet18"),
+            use_map=wn_cfg.get("use_map", True),
+            use_neighbors=wn_cfg.get("use_neighbors", True),
+            use_ego=wn_cfg.get("use_ego", True),
+            weight_scale=wn_cfg.get("weight_scale", None),
+        ).to(device)
+        self.weight_net.load_state_dict(ckpt["weight_net_state_dict"])
+        self.weight_net.eval()
+        for p in self.weight_net.parameters():
+            p.requires_grad_(False)
+
+        nm = ckpt.get("norm_mean")
+        ns = ckpt.get("norm_std")
+        if nm is not None and self.norm_mean is None:
+            self.norm_mean = torch.as_tensor(np.asarray(nm), dtype=torch.float32)
+        if ns is not None and self.norm_std is None:
+            self.norm_std = torch.as_tensor(np.asarray(ns), dtype=torch.float32)
+
+    def _compute_weights(self, x, data_batch):
+        """Return per-sample weight tensor of shape (B, F).
+
+        Prefers the weight network when configured; otherwise broadcasts
+        self.reward_weights to (B, F).
+        """
+        device = x.device
+        self._load_weight_net(device)
+
+        if self.weight_net is not None:
+            # Build a context dict with one row per scene (B is num scenes).
+            B = x.shape[0]
+            context_keys = [
+                "image",
+                "history_positions",
+                "history_yaws",
+                "history_speeds",
+                "history_availabilities",
+                "extent",
+                "all_other_agents_history_positions",
+                "all_other_agents_history_yaws",
+                "all_other_agents_history_speeds",
+                "all_other_agents_history_availabilities",
+                "all_other_agents_extents",
+            ]
+            ctx = {}
+            for key in context_keys:
+                val = data_batch.get(key) if isinstance(data_batch, dict) else getattr(data_batch, key, None)
+                if val is None:
+                    continue
+                # Detach so guidance backprop doesn't flow into the encoder.
+                ctx[key] = val.detach()
+            # If batch rows correspond to agents rather than scenes, the
+            # network is still valid (it just sees per-agent context); we
+            # only need the output to be shaped (B, F).
+            with torch.no_grad():
+                w = self.weight_net(ctx)  # (B, F)
+            if w.shape[0] != B:
+                # Broadcast / truncate to B.
+                if w.shape[0] == 1:
+                    w = w.expand(B, -1)
+                else:
+                    w = w[:B]
+            return w.to(device)
+
+        if self.reward_weights is not None:
+            return self.reward_weights.to(device).unsqueeze(0).expand(x.shape[0], -1)
+        return None
+
     def forward(self, x, data_batch, agt_mask=None):
         """
         x: (B, N, T, 6) -> state in agent frame
         returns (B, N) loss. Minimize -reward.
         """
-        if self.reward_weights is None or len(self.feature_names) == 0:
+        if len(self.feature_names) == 0:
+            return x.new_zeros((x.shape[0], x.shape[1]))
+
+        w = self._compute_weights(x, data_batch)
+        if w is None:
             return x.new_zeros((x.shape[0], x.shape[1]))
 
         feats = self._extract_basic_features(x, data_batch, self.dt, self.feature_names, agt_mask)  # (B,N,F)
 
         device = x.device
-        F = self.reward_weights.numel()
-        if feats.size(-1) != F:
+        F_ = w.shape[-1]
+        if feats.size(-1) != F_:
             raise RuntimeError(
-                f"Feature length mismatch: feats={feats.size(-1)} vs weights={F}. "
+                f"Feature length mismatch: feats={feats.size(-1)} vs weights={F_}. "
                 f"Ensure feature_names are consistent."
             )
 
-        w = self.reward_weights.to(device).view(1, 1, F)
         if self.norm_mean is not None and self.norm_std is not None:
-            m = self.norm_mean.to(device).view(1, 1, F)
-            s = torch.clamp(self.norm_std.to(device).view(1, 1, F), min=1e-6)
+            m = self.norm_mean.to(device).view(1, 1, F_)
+            s = torch.clamp(self.norm_std.to(device).view(1, 1, F_), min=1e-6)
             feats = (feats - m) / s
 
-        reward = torch.sum(feats * w, dim=-1)  # (B,N)
+        # w: (B, F) -> (B, 1, F) so it broadcasts over N agents per scene.
+        w_b = w.view(w.shape[0], 1, F_)
+        reward = torch.sum(feats * w_b, dim=-1)  # (B, N)
         loss = -self.weight * reward
 
         if agt_mask is not None:

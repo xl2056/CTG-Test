@@ -27,7 +27,10 @@ class AdversarialIRLDiffusionInference:
         self.theta_ema = None  # EMA of theta for stability
         self.irl_norm_mean = None
         self.irl_norm_std = None
+        # Default location for legacy theta pickles; weight network .pt
+        # checkpoints will be picked up automatically from the same dir.
         self.pkl_dir = f"./MaxEntIRL/irl_output/weights/{config.scene_location}_99.pkl"
+        self.weight_net_ckpt_path = None  # filled in during load_pkl()
         self.location_output_dir = os.path.join(hdf5_dir, config.scene_location)
         os.makedirs(self.location_output_dir, exist_ok=True)
         self.hdf5_path = os.path.join(self.location_output_dir, "data.hdf5")
@@ -67,26 +70,36 @@ class AdversarialIRLDiffusionInference:
 
 
     def convert_reward_to_guidance(self):
-        """Convert learned reward weights to diffusion guidance"""
+        """Convert learned reward weights to diffusion guidance.
 
-        # Define feature names to match your IRL features
+        Produces a `learned_reward_guidance` config with either the legacy
+        `reward_weights` vector or a `weight_net_ckpt` path, depending on
+        what was loaded via `load_pkl()`.
+        """
         feature_names = self.config.feature_names
 
-        # Create custom guidance based on learned reward
-        reward_guidance = {
+        params = {
+            'feature_names': feature_names,
+            'dt': self.config.step_time,
+        }
+        if self.irl_norm_mean is not None:
+            params['norm_mean'] = np.asarray(self.irl_norm_mean).tolist()
+        if self.irl_norm_std is not None:
+            params['norm_std'] = np.asarray(self.irl_norm_std).tolist()
+
+        if self.weight_net_ckpt_path is not None:
+            params['weight_net_ckpt'] = self.weight_net_ckpt_path
+        elif self.current_theta is not None:
+            params['reward_weights'] = np.asarray(self.current_theta).tolist()
+        else:
+            return None
+
+        return {
             'name': 'learned_reward_guidance',
             'weight': self.config.guidance_weight,
-            'params': {
-                'reward_weights': self.current_theta.tolist(),
-                'feature_names': feature_names,
-                'dt': self.config.step_time,
-                'norm_mean': self.irl_norm_mean.tolist(),
-                'norm_std': self.irl_norm_std.tolist(),
-            },
-            'agents': None  # Apply to all agents
+            'params': params,
+            'agents': None,
         }
-
-        return reward_guidance
 
     def apply_reward_guidance(self, reward_guidance):
         """Apply learned reward as guidance to diffusion model"""
@@ -128,11 +141,33 @@ class AdversarialIRLDiffusionInference:
 
 
     def load_pkl(self):
-        with open(self.pkl_dir, 'rb') as f:
+        """
+        Load either the legacy theta pickle (`*.pkl` with `final_theta`) or a
+        weight-network torch checkpoint (`*.pt`). If `self.pkl_dir` ends in
+        `.pkl` but a sibling `.pt` file exists, the `.pt` takes priority.
+        """
+        pkl_path = self.pkl_dir
+        pt_candidate = pkl_path[:-4] + ".pt" if pkl_path.endswith(".pkl") else pkl_path
+
+        if os.path.exists(pt_candidate):
+            ckpt = torch.load(pt_candidate, map_location="cpu")
+            if "weight_net_state_dict" in ckpt:
+                self.weight_net_ckpt_path = pt_candidate
+                self.current_theta = None
+                self.irl_norm_mean = ckpt.get("norm_mean")
+                self.irl_norm_std = ckpt.get("norm_std")
+                print(f"Loaded weight network checkpoint: {pt_candidate}")
+                return
+
+        with open(pkl_path, "rb") as f:
             data = pickle.load(f)
-            self.current_theta = data['final_theta']
-            self.irl_norm_mean = data['norm_mean']
-            self.irl_norm_std  = data['norm_std']
+            # Support both `final_theta` (adversarial results pkl) and `theta`
+            # (run_irl.py output pkl).
+            self.current_theta = data.get("final_theta", data.get("theta"))
+            self.irl_norm_mean = data.get("norm_mean")
+            self.irl_norm_std = data.get("norm_std")
+            self.weight_net_ckpt_path = data.get("weight_net_ckpt")
+            print(f"Loaded legacy IRL pkl: {pkl_path}")
 
     def run_and_save_results(self, render_to_video=True, render_to_img=False, render_cfg=None):
         scene_i = 0
