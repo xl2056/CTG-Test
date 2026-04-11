@@ -1,6 +1,7 @@
 import json
 import os
 import pickle
+import traceback
 from typing import Optional
 
 import numpy as np
@@ -447,20 +448,26 @@ class AdversarialIRLDiffusionInference:
                                     save_every_n_frames=render_cfg['save_every_n_frames'],
                                     draw_mode=render_cfg['draw_mode'],
                                 )
-                            except FileNotFoundError as e:
-                                print(
-                                    f"[inference] visualize_guided_rollout failed "
-                                    f"(likely missing ffmpeg binary): {e}. "
-                                    f"PNG frames under {scene_viz_dir} are still "
-                                    f"available; install ffmpeg (e.g. "
-                                    f"`conda install -c conda-forge ffmpeg`) to "
-                                    f"get mp4 output."
-                                )
                             except Exception as e:
+                                # Don't let a rendering failure kill the whole
+                                # inference loop. Dump the full traceback so we
+                                # can tell ffmpeg-missing (FileNotFoundError for
+                                # the binary) apart from ffmpeg-ran-but-failed
+                                # (e.g. libx264 encoder missing in the conda-forge
+                                # default build).
                                 print(
                                     f"[inference] visualize_guided_rollout raised "
-                                    f"{type(e).__name__}: {e}. Continuing with "
-                                    f"remaining scenes."
+                                    f"{type(e).__name__}: {e}"
+                                )
+                                traceback.print_exc()
+                                print(
+                                    f"[inference] PNG frames under {scene_viz_dir} "
+                                    f"are still available. If ffmpeg is installed "
+                                    f"but the mp4 step is failing, verify that "
+                                    f"libx264 is available: "
+                                    f"`ffmpeg -hide_banner -encoders | grep libx264`. "
+                                    f"On conda-forge install the GPL build: "
+                                    f"`conda install -c conda-forge 'ffmpeg=*=gpl*'`."
                                 )
                     
                     if "buffer" in info:
