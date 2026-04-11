@@ -426,22 +426,42 @@ class AdversarialIRLDiffusionInference:
                             if constraint_config is not None and len(constraint_config) > 0:
                                 viz_constraint_config = constraint_config[0] if isinstance(constraint_config[0], list) else constraint_config
                             
-                            # Visualize the rollout
-                            visualize_guided_rollout(
-                                scene_viz_dir,  # Scene-specific directory
-                                render_rasterizer,
-                                scene_name,
-                                scene_buffer,
-                                guidance_config=viz_guidance_config,
-                                constraint_config=viz_constraint_config,
-                                fps=(1.0 / self.config.step_time),
-                                n_step_action=eval_cfg.n_step_action,
-                                viz_diffusion_steps=False,
-                                first_frame_only=render_to_img,
-                                sim_num=start_frame,
-                                save_every_n_frames=render_cfg['save_every_n_frames'],
-                                draw_mode=render_cfg['draw_mode'],
-                            )
+                            # Visualize the rollout. Wrap so a missing ffmpeg
+                            # (FileNotFoundError from create_video's subprocess)
+                            # only loses the mp4 mux step, not the rest of the
+                            # loop: png frames, stats.json and buffer h5 should
+                            # still be produced for the remaining scenes.
+                            try:
+                                visualize_guided_rollout(
+                                    scene_viz_dir,  # Scene-specific directory
+                                    render_rasterizer,
+                                    scene_name,
+                                    scene_buffer,
+                                    guidance_config=viz_guidance_config,
+                                    constraint_config=viz_constraint_config,
+                                    fps=(1.0 / self.config.step_time),
+                                    n_step_action=eval_cfg.n_step_action,
+                                    viz_diffusion_steps=False,
+                                    first_frame_only=render_to_img,
+                                    sim_num=start_frame,
+                                    save_every_n_frames=render_cfg['save_every_n_frames'],
+                                    draw_mode=render_cfg['draw_mode'],
+                                )
+                            except FileNotFoundError as e:
+                                print(
+                                    f"[inference] visualize_guided_rollout failed "
+                                    f"(likely missing ffmpeg binary): {e}. "
+                                    f"PNG frames under {scene_viz_dir} are still "
+                                    f"available; install ffmpeg (e.g. "
+                                    f"`conda install -c conda-forge ffmpeg`) to "
+                                    f"get mp4 output."
+                                )
+                            except Exception as e:
+                                print(
+                                    f"[inference] visualize_guided_rollout raised "
+                                    f"{type(e).__name__}: {e}. Continuing with "
+                                    f"remaining scenes."
+                                )
                     
                     if "buffer" in info:
                         dump_episode_buffer(
