@@ -298,9 +298,10 @@ class MaxEntIRL:
 
     def _sync_map_shape_from_features(self, features: List[Any]) -> None:
         """
-        Peek at the first frame that has a context image and copy its channel
-        count / spatial size into self.config.weight_network so the encoder is
-        built to match the real data instead of the (3, 224, 224) default.
+        Peek at the first frame that has a context and copy the actual raster
+        shape (C, H, W) and history length T into self.config.weight_network so
+        the encoder is built to match the real data instead of the
+        (3, 224, 224, T=history_num_frames+1) defaults.
         """
         wn_cfg = getattr(self.config, "weight_network", None)
         if wn_cfg is None:
@@ -310,27 +311,50 @@ class MaxEntIRL:
                 ctx = frame_entry.get("context") if isinstance(frame_entry, dict) else None
                 if not ctx:
                     continue
+
+                changed = False
+
+                # --- Map raster (C, H, W) ---
                 img = ctx.get("image")
-                if img is None:
-                    continue
-                arr = np.asarray(img)
-                # trajdata stores image as (N_agents, C, H, W); drop leading dims
-                # until we reach (C, H, W).
-                while arr.ndim > 3:
-                    arr = arr[0]
-                if arr.ndim != 3:
-                    return
-                c, h, w = int(arr.shape[0]), int(arr.shape[1]), int(arr.shape[2])
-                old_c = getattr(wn_cfg, "map_channels", None)
-                old_hw = getattr(wn_cfg, "map_image_hw", None)
-                if old_c != c or old_hw != h:
-                    print(
-                        f"[MaxEntIRL] Inferred map raster shape from features: "
-                        f"C={c}, H={h}, W={w} (was C={old_c}, HW={old_hw}). "
-                        f"Rebuilding WeightNetwork with the correct shape."
-                    )
-                    wn_cfg.map_channels = c
-                    wn_cfg.map_image_hw = h
+                if img is not None:
+                    arr = np.asarray(img)
+                    # trajdata stores image as (N_agents, C, H, W); drop leading
+                    # dims until we reach (C, H, W).
+                    while arr.ndim > 3:
+                        arr = arr[0]
+                    if arr.ndim == 3:
+                        c, h, w = int(arr.shape[0]), int(arr.shape[1]), int(arr.shape[2])
+                        old_c = getattr(wn_cfg, "map_channels", None)
+                        old_hw = getattr(wn_cfg, "map_image_hw", None)
+                        if old_c != c or old_hw != h:
+                            print(
+                                f"[MaxEntIRL] Inferred map raster shape from features: "
+                                f"C={c}, H={h}, W={w} (was C={old_c}, HW={old_hw})."
+                            )
+                            wn_cfg.map_channels = c
+                            wn_cfg.map_image_hw = h
+                            changed = True
+
+                # --- History length T ---
+                hist_pos = ctx.get("history_positions")
+                if hist_pos is not None:
+                    arr = np.asarray(hist_pos)
+                    # Expected shape (N_agents, T, 2) -> strip leading dims down to (T, 2).
+                    while arr.ndim > 2:
+                        arr = arr[0]
+                    if arr.ndim == 2 and arr.shape[1] == 2:
+                        t_steps = int(arr.shape[0])
+                        old_t = getattr(wn_cfg, "num_history_steps", None)
+                        if old_t != t_steps:
+                            print(
+                                f"[MaxEntIRL] Inferred history length from features: "
+                                f"T={t_steps} (was num_history_steps={old_t})."
+                            )
+                            wn_cfg.num_history_steps = t_steps
+                            changed = True
+
+                if changed:
+                    print("[MaxEntIRL] Rebuilding WeightNetwork with the inferred shapes.")
                     # Invalidate any previously-built encoder so it gets rebuilt
                     # with the new shape.
                     self.weight_net = None
