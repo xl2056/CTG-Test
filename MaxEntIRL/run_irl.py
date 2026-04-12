@@ -436,6 +436,12 @@ class MaxEntIRL:
                 w = self.weight_net(ctx_torch)  # (1, F)
                 w_norms.append(float(w.detach().norm().item()))
 
+                # Accumulate losses within a frame so we only backward once
+                # per weight_net forward (avoids "backward through graph a
+                # second time" when a frame has multiple agents).
+                frame_loss = torch.tensor(0.0, device=self.device)
+                frame_n = 0
+
                 for rollout_vecs_np, gt_vec_np in agent_examples:
                     rollout_vecs = torch.from_numpy(rollout_vecs_np).to(self.device)  # (R, F)
                     gt_vec = torch.from_numpy(gt_vec_np).to(self.device)              # (F,)
@@ -449,12 +455,8 @@ class MaxEntIRL:
                     log_z = torch.logsumexp(rewards, dim=0)
                     expert_reward = rewards[-1]
                     nll = -(expert_reward - log_z)
-
-                    # Gradient accumulation: backward each example immediately
-                    # to free the computation graph and avoid OOM.
-                    (nll / total_examples).backward()
-                    running_loss += float(nll.item())
-                    n_examples += 1
+                    frame_loss = frame_loss + nll
+                    frame_n += 1
 
                     with torch.no_grad():
                         probs = torch.softmax(rewards, dim=0)
@@ -465,6 +467,12 @@ class MaxEntIRL:
                             human_likeness.append(
                                 float(torch.norm(stacked[idx] - gt_vec).item())
                             )
+
+                # One backward per frame — frees graph, keeps memory O(1 frame).
+                if frame_n > 0:
+                    (frame_loss / total_examples).backward()
+                    running_loss += float(frame_loss.item())
+                    n_examples += frame_n
 
             if n_examples == 0:
                 print("No trajectories found in this iteration")
