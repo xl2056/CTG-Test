@@ -1,5 +1,6 @@
 import os
 import pickle
+import random
 from typing import List, Dict, Any, Tuple, Optional
 
 import numpy as np
@@ -414,15 +415,28 @@ class MaxEntIRL:
             print("[MaxEntIRL] No frames with context available; cannot train weight network.")
             return {}, {}
 
-        total_examples = sum(len(ae) for _, ae in packed_frames)
-        print(f"[MaxEntIRL] Pre-computed embeddings for {len(packed_frames)} frames, "
-              f"{total_examples} agent examples total.")
+        # -------------------------------------------------------------- #
+        # Train / Val split (80/20, shuffled by frame)                    #
+        # -------------------------------------------------------------- #
+        random.seed(42)
+        indices = list(range(len(packed_frames)))
+        random.shuffle(indices)
+        val_size = max(1, int(len(indices) * 0.2))
+        train_indices = indices[val_size:]
+        val_indices = indices[:val_size]
+
+        train_frames = [packed_frames[i] for i in train_indices]
+        val_frames = [packed_frames[i] for i in val_indices]
+
+        train_examples = sum(len(ae) for _, ae in train_frames)
+        val_examples = sum(len(ae) for _, ae in val_frames)
+        print(f"[MaxEntIRL] Train: {len(train_frames)} frames ({train_examples} examples), "
+              f"Val: {len(val_frames)} frames ({val_examples} examples)")
 
         # -------------------------------------------------------------- #
         # Phase 2: train MLP head only                                    #
         # -------------------------------------------------------------- #
         self.weight_net.train()
-        # Build a head-only optimizer so encoder weights stay frozen
         head_optimizer = torch.optim.Adam(
             self.weight_net.head.parameters(),
             lr=getattr(getattr(self.config, "weight_network", None), "lr", 3e-4),
@@ -432,12 +446,20 @@ class MaxEntIRL:
         training_log = {
             "iteration": [],
             "loss": [],
+            "val_loss": [],
             "average_log-likelihood": [],
             "average_human_likeness": [],
             "average_weight_norm": [],
         }
 
+        # Early stopping state
+        best_val_loss = float("inf")
+        best_state_dict = None
+        patience = 30
+        patience_counter = 0
+
         for it in range(self.n_iters):
+            # ---- Training ----
             head_optimizer.zero_grad()
             running_loss = 0.0
             n_examples = 0
@@ -445,9 +467,9 @@ class MaxEntIRL:
             human_likeness = []
             w_norms = []
 
-            for embed_cpu, agent_examples in packed_frames:
-                embed = embed_cpu.to(self.device)  # (1, concat_dim), no grad needed
-                w = self.weight_net.head(embed)     # (1, F), grad through head only
+            for embed_cpu, agent_examples in train_frames:
+                embed = embed_cpu.to(self.device)
+                w = self.weight_net.head(embed)
                 w_norms.append(float(w.detach().norm().item()))
 
                 frame_loss = torch.tensor(0.0, device=self.device)
@@ -480,7 +502,7 @@ class MaxEntIRL:
                             )
 
                 if frame_n > 0:
-                    (frame_loss / total_examples).backward()
+                    (frame_loss / train_examples).backward()
                     running_loss += float(frame_loss.item())
                     n_examples += frame_n
 
@@ -491,8 +513,46 @@ class MaxEntIRL:
             torch.nn.utils.clip_grad_norm_(self.weight_net.head.parameters(), max_norm=5.0)
             head_optimizer.step()
 
+            train_loss = running_loss / n_examples
+
+            # ---- Validation ----
+            val_running_loss = 0.0
+            val_n = 0
+            with torch.no_grad():
+                for embed_cpu, agent_examples in val_frames:
+                    embed = embed_cpu.to(self.device)
+                    w = self.weight_net.head(embed)
+
+                    for rollout_vecs_np, gt_vec_np in agent_examples:
+                        rollout_vecs = torch.from_numpy(rollout_vecs_np).to(self.device)
+                        gt_vec = torch.from_numpy(gt_vec_np).to(self.device)
+
+                        if rollout_vecs.numel() == 0:
+                            stacked = gt_vec.unsqueeze(0)
+                        else:
+                            stacked = torch.cat([rollout_vecs, gt_vec.unsqueeze(0)], dim=0)
+
+                        rewards = (stacked * w).sum(dim=-1)
+                        log_z = torch.logsumexp(rewards, dim=0)
+                        expert_reward = rewards[-1]
+                        nll = -(expert_reward - log_z)
+                        val_running_loss += float(nll.item())
+                        val_n += 1
+
+            val_loss = val_running_loss / val_n if val_n > 0 else float("nan")
+
+            # ---- Early stopping check ----
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_state_dict = {k: v.detach().cpu().clone() for k, v in self.weight_net.state_dict().items()}
+                patience_counter = 0
+            else:
+                patience_counter += 1
+
+            # ---- Logging ----
             training_log["iteration"].append(it + 1)
-            training_log["loss"].append(running_loss / n_examples)
+            training_log["loss"].append(train_loss)
+            training_log["val_loss"].append(val_loss)
             training_log["average_log-likelihood"].append(
                 float(np.mean(log_likes)) if log_likes else float("nan")
             )
@@ -505,10 +565,23 @@ class MaxEntIRL:
 
             if (it + 1) % 10 == 0:
                 print(
-                    f"Iteration {it + 1}: loss={training_log['loss'][-1]:.4f} "
+                    f"Iteration {it + 1}: train_loss={train_loss:.4f} "
+                    f"val_loss={val_loss:.4f} "
                     f"LL={training_log['average_log-likelihood'][-1]:.4f} "
                     f"|w|={training_log['average_weight_norm'][-1]:.3f}"
+                    f"{'  *best*' if patience_counter == 0 else ''}"
                 )
+
+            if patience_counter >= patience:
+                print(f"[MaxEntIRL] Early stopping at iteration {it + 1} "
+                      f"(val_loss did not improve for {patience} iterations, "
+                      f"best val_loss={best_val_loss:.4f})")
+                break
+
+        # Restore best checkpoint (by val loss)
+        if best_state_dict is not None:
+            self.weight_net.load_state_dict(best_state_dict)
+            print(f"[MaxEntIRL] Restored best model (val_loss={best_val_loss:.4f})")
 
         # Return the weight network state dict as the "learned reward" artifact.
         state = {
@@ -599,7 +672,12 @@ def plot_training_curves(training_log: Dict[str, Any], save_path: str) -> None:
     for ax_row, (key, label) in zip(axes, panels):
         ax = ax_row[0]
         vals = training_log[key]
-        ax.plot(iters[: len(vals)], vals, linewidth=1.2)
+        ax.plot(iters[: len(vals)], vals, linewidth=1.2, label="train" if key == "loss" else label)
+        # Overlay val_loss on the loss panel
+        if key == "loss" and "val_loss" in training_log and training_log["val_loss"]:
+            val_vals = training_log["val_loss"]
+            ax.plot(iters[: len(val_vals)], val_vals, linewidth=1.2, color="orange", label="val")
+            ax.legend()
         ax.set_xlabel("Iteration")
         ax.set_ylabel(label)
         ax.set_title(label)
