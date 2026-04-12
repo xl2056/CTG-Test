@@ -365,52 +365,69 @@ class MaxEntIRL:
         """
         PyTorch training loop for context-conditional w_theta(c).
 
-        For each (frame, agent) triple with rollouts + expert:
-            w = weight_net(context_frame)                      # (1, F)
-            rewards_rollouts = sum(w * phi_rollouts, dim=-1)   # (R,)
-            reward_expert    = sum(w * phi_expert)             # scalar
-            log_Z = logsumexp([rewards_rollouts, reward_expert])
-            loss_i = -(reward_expert - log_Z)
-        Total loss = mean over (frame, agent) pairs + L2 regularization.
+        Strategy: pre-compute context embeddings (map/ego/neighbor encoders)
+        once with torch.no_grad(), then iteratively train only the MLP head
+        that maps embeddings -> feature weights.  This avoids autograd graph
+        conflicts across frames and drastically reduces per-iteration VRAM.
         """
-        # Infer the actual BEV raster shape from the first available context so
-        # the map encoder is built with the right in_channels (trajdata emits
-        # multi-layer rasters, not 3-channel RGB).
         self._sync_map_shape_from_features(features)
         self._ensure_weight_net()
 
-        # Pre-pack all (frame -> torch context, list of (feat_rollouts, feat_expert))
-        packed_frames = []
-        for scene_data in features:
-            for frame_entry in scene_data:
-                context = frame_entry.get("context")
-                if context is None:
-                    continue
-                frame_features = frame_entry["frame_features"]
-                agent_rollout_features = frame_features["agent_rollout_features"]
-                agent_gt_features = frame_features["agent_ground_truth_features"]
-
-                agent_examples = []
-                for agent_id, gt_feat in agent_gt_features.items():
-                    if agent_id not in agent_rollout_features:
+        # -------------------------------------------------------------- #
+        # Phase 1: pre-pack features & pre-compute context embeddings     #
+        # -------------------------------------------------------------- #
+        packed_frames = []  # list of (embed_cpu, agent_examples)
+        self.weight_net.eval()  # use running stats for BatchNorm
+        print("[MaxEntIRL] Pre-computing context embeddings …")
+        with torch.no_grad():
+            for scene_data in features:
+                for frame_entry in scene_data:
+                    context = frame_entry.get("context")
+                    if context is None:
                         continue
-                    rollout_vecs = np.stack(
-                        [
-                            self.convert_features_to_array(rfd)
-                            for rfd in agent_rollout_features[agent_id]
-                        ],
-                        axis=0,
-                    ) if agent_rollout_features[agent_id] else np.zeros((0, self.feature_num))
-                    gt_vec = self.convert_features_to_array(gt_feat)
-                    agent_examples.append((rollout_vecs.astype(np.float32), gt_vec.astype(np.float32)))
+                    frame_features = frame_entry["frame_features"]
+                    agent_rollout_features = frame_features["agent_rollout_features"]
+                    agent_gt_features = frame_features["agent_ground_truth_features"]
 
-                if not agent_examples:
-                    continue
-                packed_frames.append((context, agent_examples))
+                    agent_examples = []
+                    for agent_id, gt_feat in agent_gt_features.items():
+                        if agent_id not in agent_rollout_features:
+                            continue
+                        rollout_vecs = np.stack(
+                            [
+                                self.convert_features_to_array(rfd)
+                                for rfd in agent_rollout_features[agent_id]
+                            ],
+                            axis=0,
+                        ) if agent_rollout_features[agent_id] else np.zeros((0, self.feature_num))
+                        gt_vec = self.convert_features_to_array(gt_feat)
+                        agent_examples.append((rollout_vecs.astype(np.float32), gt_vec.astype(np.float32)))
+
+                    if not agent_examples:
+                        continue
+
+                    ctx_torch = self._context_to_torch(context)
+                    embed = self.weight_net.encode_context(ctx_torch).cpu()  # (1, concat_dim)
+                    packed_frames.append((embed, agent_examples))
 
         if not packed_frames:
             print("[MaxEntIRL] No frames with context available; cannot train weight network.")
             return {}, {}
+
+        total_examples = sum(len(ae) for _, ae in packed_frames)
+        print(f"[MaxEntIRL] Pre-computed embeddings for {len(packed_frames)} frames, "
+              f"{total_examples} agent examples total.")
+
+        # -------------------------------------------------------------- #
+        # Phase 2: train MLP head only                                    #
+        # -------------------------------------------------------------- #
+        self.weight_net.train()
+        # Build a head-only optimizer so encoder weights stay frozen
+        head_optimizer = torch.optim.Adam(
+            self.weight_net.head.parameters(),
+            lr=getattr(getattr(self.config, "weight_network", None), "lr", 3e-4),
+            weight_decay=getattr(getattr(self.config, "weight_network", None), "l2", 1e-4),
+        )
 
         training_log = {
             "iteration": [],
@@ -420,38 +437,32 @@ class MaxEntIRL:
             "average_weight_norm": [],
         }
 
-        # Count total agent examples for gradient averaging
-        total_examples = sum(len(ae) for _, ae in packed_frames)
-
         for it in range(self.n_iters):
-            self.optimizer.zero_grad()
+            head_optimizer.zero_grad()
             running_loss = 0.0
             n_examples = 0
             log_likes = []
             human_likeness = []
             w_norms = []
 
-            for context_np, agent_examples in packed_frames:
-                ctx_torch = self._context_to_torch(context_np)
-                w = self.weight_net(ctx_torch)  # (1, F)
+            for embed_cpu, agent_examples in packed_frames:
+                embed = embed_cpu.to(self.device)  # (1, concat_dim), no grad needed
+                w = self.weight_net.head(embed)     # (1, F), grad through head only
                 w_norms.append(float(w.detach().norm().item()))
 
-                # Accumulate losses within a frame so we only backward once
-                # per weight_net forward (avoids "backward through graph a
-                # second time" when a frame has multiple agents).
                 frame_loss = torch.tensor(0.0, device=self.device)
                 frame_n = 0
 
                 for rollout_vecs_np, gt_vec_np in agent_examples:
-                    rollout_vecs = torch.from_numpy(rollout_vecs_np).to(self.device)  # (R, F)
-                    gt_vec = torch.from_numpy(gt_vec_np).to(self.device)              # (F,)
+                    rollout_vecs = torch.from_numpy(rollout_vecs_np).to(self.device)
+                    gt_vec = torch.from_numpy(gt_vec_np).to(self.device)
 
                     if rollout_vecs.numel() == 0:
                         stacked = gt_vec.unsqueeze(0)
                     else:
-                        stacked = torch.cat([rollout_vecs, gt_vec.unsqueeze(0)], dim=0)  # (R+1, F)
+                        stacked = torch.cat([rollout_vecs, gt_vec.unsqueeze(0)], dim=0)
 
-                    rewards = (stacked * w).sum(dim=-1)  # (R+1,)
+                    rewards = (stacked * w).sum(dim=-1)
                     log_z = torch.logsumexp(rewards, dim=0)
                     expert_reward = rewards[-1]
                     nll = -(expert_reward - log_z)
@@ -468,7 +479,6 @@ class MaxEntIRL:
                                 float(torch.norm(stacked[idx] - gt_vec).item())
                             )
 
-                # One backward per frame — frees graph, keeps memory O(1 frame).
                 if frame_n > 0:
                     (frame_loss / total_examples).backward()
                     running_loss += float(frame_loss.item())
@@ -478,8 +488,8 @@ class MaxEntIRL:
                 print("No trajectories found in this iteration")
                 continue
 
-            torch.nn.utils.clip_grad_norm_(self.weight_net.parameters(), max_norm=5.0)
-            self.optimizer.step()
+            torch.nn.utils.clip_grad_norm_(self.weight_net.head.parameters(), max_norm=5.0)
+            head_optimizer.step()
 
             training_log["iteration"].append(it + 1)
             training_log["loss"].append(running_loss / n_examples)
