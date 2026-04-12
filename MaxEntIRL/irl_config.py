@@ -18,8 +18,8 @@ class WeightNetworkConfig:
     nbr_feat_dim: int = 128
     ego_feat_dim: int = 64
 
-    # Head MLP hidden dims (input/output are added automatically)
-    mlp_hidden: List[int] = field(default_factory=lambda: [128])
+    # Head MLP hidden dims (empty list = linear mapping, no hidden layer)
+    mlp_hidden: List[int] = field(default_factory=list)
 
     # Map encoder params
     map_arch: str = "resnet18"
@@ -30,11 +30,11 @@ class WeightNetworkConfig:
     weight_scale: Optional[float] = None
 
     # Optimizer settings
-    lr: float = 1e-4
-    l2: float = 1e-3
+    lr: float = 5e-4
+    l2: float = 5e-3
 
     # Dropout on the embedding fed to the MLP head (0 = disabled)
-    dropout: float = 0.3
+    dropout: float = 0.5
 
     # Optional override for ego/neighbor history length; if None use
     # (config.history_num_frames + 1).

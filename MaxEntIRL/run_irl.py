@@ -461,7 +461,7 @@ class MaxEntIRL:
         # Early stopping state
         best_val_loss = float("inf")
         best_state_dict = None
-        patience = 30
+        patience = 50
         patience_counter = 0
 
         for it in range(self.n_iters):
@@ -703,7 +703,7 @@ if __name__ == "__main__":
     feature_dir = os.path.join(default_config.output_dir, "features")
     features = MaxEntIRL.load_features(feature_dir)
 
-    irl = MaxEntIRL(feature_names=default_config.feature_names, config=default_config)
+    irl = MaxEntIRL(feature_names=default_config.feature_names, config=default_config, n_iters=500)
     artifact, log = irl.fit(features)
 
     if isinstance(artifact, dict) and "weight_net_state_dict" in artifact:
