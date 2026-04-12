@@ -420,9 +420,13 @@ class MaxEntIRL:
             "average_weight_norm": [],
         }
 
+        # Count total agent examples for gradient averaging
+        total_examples = sum(len(ae) for _, ae in packed_frames)
+
         for it in range(self.n_iters):
             self.optimizer.zero_grad()
-            losses = []
+            running_loss = 0.0
+            n_examples = 0
             log_likes = []
             human_likeness = []
             w_norms = []
@@ -445,7 +449,12 @@ class MaxEntIRL:
                     log_z = torch.logsumexp(rewards, dim=0)
                     expert_reward = rewards[-1]
                     nll = -(expert_reward - log_z)
-                    losses.append(nll)
+
+                    # Gradient accumulation: backward each example immediately
+                    # to free the computation graph and avoid OOM.
+                    (nll / total_examples).backward()
+                    running_loss += float(nll.item())
+                    n_examples += 1
 
                     with torch.no_grad():
                         probs = torch.softmax(rewards, dim=0)
@@ -457,17 +466,15 @@ class MaxEntIRL:
                                 float(torch.norm(stacked[idx] - gt_vec).item())
                             )
 
-            if not losses:
+            if n_examples == 0:
                 print("No trajectories found in this iteration")
                 continue
 
-            total_loss = torch.stack(losses).mean()
-            total_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.weight_net.parameters(), max_norm=5.0)
             self.optimizer.step()
 
             training_log["iteration"].append(it + 1)
-            training_log["loss"].append(float(total_loss.item()))
+            training_log["loss"].append(running_loss / n_examples)
             training_log["average_log-likelihood"].append(
                 float(np.mean(log_likes)) if log_likes else float("nan")
             )
