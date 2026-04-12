@@ -437,11 +437,17 @@ class MaxEntIRL:
         # Phase 2: train MLP head only                                    #
         # -------------------------------------------------------------- #
         self.weight_net.train()
+        wn_cfg = getattr(self.config, "weight_network", None)
         head_optimizer = torch.optim.Adam(
             self.weight_net.head.parameters(),
-            lr=getattr(getattr(self.config, "weight_network", None), "lr", 3e-4),
-            weight_decay=getattr(getattr(self.config, "weight_network", None), "l2", 1e-4),
+            lr=getattr(wn_cfg, "lr", 1e-4),
+            weight_decay=getattr(wn_cfg, "l2", 1e-3),
         )
+        dropout_rate = getattr(wn_cfg, "dropout", 0.3)
+        embed_dropout = torch.nn.Dropout(p=dropout_rate) if dropout_rate > 0 else None
+        if embed_dropout is not None:
+            embed_dropout.to(self.device)
+            print(f"[MaxEntIRL] Using embedding dropout p={dropout_rate}")
 
         training_log = {
             "iteration": [],
@@ -460,6 +466,7 @@ class MaxEntIRL:
 
         for it in range(self.n_iters):
             # ---- Training ----
+            random.shuffle(train_frames)  # break ordering bias each iteration
             head_optimizer.zero_grad()
             running_loss = 0.0
             n_examples = 0
@@ -469,6 +476,8 @@ class MaxEntIRL:
 
             for embed_cpu, agent_examples in train_frames:
                 embed = embed_cpu.to(self.device)
+                if embed_dropout is not None:
+                    embed = embed_dropout(embed)  # regularize during training
                 w = self.weight_net.head(embed)
                 w_norms.append(float(w.detach().norm().item()))
 

@@ -30,8 +30,11 @@ class WeightNetworkConfig:
     weight_scale: Optional[float] = None
 
     # Optimizer settings
-    lr: float = 3e-4
-    l2: float = 1e-4
+    lr: float = 1e-4
+    l2: float = 1e-3
+
+    # Dropout on the embedding fed to the MLP head (0 = disabled)
+    dropout: float = 0.3
 
     # Optional override for ego/neighbor history length; if None use
     # (config.history_num_frames + 1).
