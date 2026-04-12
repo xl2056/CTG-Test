@@ -545,6 +545,48 @@ class MaxEntIRL:
         print(f"Saved IRL results to {path}")
 
 
+def plot_training_curves(training_log: Dict[str, Any], save_path: str) -> None:
+    """Save a training curve figure from training_log to *save_path*."""
+    import matplotlib
+    matplotlib.use("Agg")  # headless backend
+    import matplotlib.pyplot as plt
+
+    iters = training_log.get("iteration", [])
+    if not iters:
+        print("[plot] No iterations recorded — skipping plot.")
+        return
+
+    # Collect which metrics exist and have plottable data
+    candidates = [
+        ("loss", "Loss"),
+        ("average_log-likelihood", "Avg Log-Likelihood"),
+        ("average_human_likeness", "Avg Human Likeness"),
+        ("average_weight_norm", "Avg Weight Norm"),
+        ("average_feature_difference", "Avg Feature Diff"),
+    ]
+    panels = [(key, label) for key, label in candidates if key in training_log and training_log[key]]
+
+    if not panels:
+        print("[plot] No plottable metrics — skipping plot.")
+        return
+
+    fig, axes = plt.subplots(len(panels), 1, figsize=(8, 3.5 * len(panels)), squeeze=False)
+    for ax_row, (key, label) in zip(axes, panels):
+        ax = ax_row[0]
+        vals = training_log[key]
+        ax.plot(iters[: len(vals)], vals, linewidth=1.2)
+        ax.set_xlabel("Iteration")
+        ax.set_ylabel(label)
+        ax.set_title(label)
+        ax.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    fig.savefig(save_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved training curve plot to {save_path}")
+
+
 if __name__ == "__main__":
     feature_dir = os.path.join(default_config.output_dir, "features")
     features = MaxEntIRL.load_features(feature_dir)
@@ -560,3 +602,7 @@ if __name__ == "__main__":
         out_path = os.path.join(default_config.output_dir, "irl_weights.pkl")
 
     irl.save_results(artifact, log, path=out_path, norm_mean=irl.norm_mean, norm_std=irl.norm_std)
+
+    # Save training curve plot
+    plot_path = os.path.join(default_config.output_dir, "training_curves.png")
+    plot_training_curves(log, plot_path)
