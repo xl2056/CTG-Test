@@ -76,7 +76,7 @@ panels = [
     ("Avg Weight Norm", [("", weight_norm, "tab:blue")]),
 ]
 
-fig, axes = plt.subplots(len(panels), 1, figsize=(8, 3.5 * len(panels)))
+fig, axes = plt.subplots(len(panels), 1, figsize=(5, 3.5 * len(panels)))
 for ax, (title, series) in zip(axes, panels):
     for label, vals, color in series:
         ax.plot(iters, vals, linewidth=1.2, color=color, label=label if label else None)
