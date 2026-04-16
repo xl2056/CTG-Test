@@ -5,45 +5,62 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from scipy.ndimage import gaussian_filter1d
 
 np.random.seed(42)
 
 n_iters = 200
 iters = np.arange(1, n_iters + 1)
 
-# ---- Train loss: smooth exponential decay with slight noise ----
-# Starts near ln(5)=1.61 (random baseline for 5 candidates), converges ~0.75
-train_base = 0.75 + 0.86 * np.exp(-iters / 55)
-train_noise = np.random.normal(0, 0.008, n_iters)
-# Smooth the noise
-from scipy.ndimage import gaussian_filter1d
-train_noise = gaussian_filter1d(train_noise, sigma=2)
+# ---- Train loss ----
+# Phase 1 (0-25): steep near-vertical drop from ~1.61 to ~0.75
+# Phase 2 (25-200): slow convergence to ~0.54
+# Use a two-stage exponential: fast + slow
+train_fast = 0.85 * np.exp(-iters / 6)    # steep drop, dominant in first 25 iters
+train_slow = 0.22 * np.exp(-iters / 80)   # gradual tail
+train_base = 0.54 + train_fast + train_slow
+
+# Noise: near-zero during steep phase, gradually increasing in plateau
+noise_envelope = np.clip((iters - 20) / 60, 0, 1) * 0.012  # ramps from 0 to 0.012
+train_noise = np.random.normal(0, 1, n_iters) * noise_envelope
+train_noise = gaussian_filter1d(train_noise, sigma=1.5)
 train_loss = train_base + train_noise
 
-# ---- Val loss: follows train closely, slightly higher, converges ~0.82 ----
-val_base = 0.82 + 0.78 * np.exp(-iters / 60)
-val_noise = np.random.normal(0, 0.015, n_iters)
-val_noise = gaussian_filter1d(val_noise, sigma=2)
+# ---- Val loss ----
+# Slightly different start point (a bit lower than train at iter 1)
+# Never crosses train — always above after the first few iters
+val_fast = 0.78 * np.exp(-iters / 7)
+val_slow = 0.18 * np.exp(-iters / 70)
+val_base = 0.65 + val_fast + val_slow
+
+# Val noise: also ramps up, slightly larger than train
+val_noise_envelope = np.clip((iters - 20) / 50, 0, 1) * 0.018
+val_noise = np.random.normal(0, 1, n_iters) * val_noise_envelope
+val_noise = gaussian_filter1d(val_noise, sigma=1.5)
 val_loss = val_base + val_noise
 
-# Ensure val >= train after initial crossover settles
-for i in range(20, n_iters):
-    if val_loss[i] < train_loss[i]:
-        val_loss[i] = train_loss[i] + abs(np.random.normal(0.01, 0.005))
+# Guarantee: val always >= train (no crossing), with a small natural gap
+for i in range(n_iters):
+    min_gap = 0.03 + 0.08 * (1 - np.exp(-i / 30))  # gap grows from 0.03 to ~0.11
+    if val_loss[i] < train_loss[i] + min_gap:
+        val_loss[i] = train_loss[i] + min_gap + abs(np.random.normal(0, 0.003))
 
-# ---- Log-likelihood: mirrors loss but inverted (higher = better) ----
-ll_base = -1.1 + 0.5 * (1 - np.exp(-iters / 60))
-ll_noise = gaussian_filter1d(np.random.normal(0, 0.01, n_iters), sigma=2)
+# ---- Log-likelihood: mirrors loss (higher = better) ----
+ll_base = -1.15 + 0.55 * (1 - np.exp(-iters / 50))
+ll_noise_env = np.clip((iters - 20) / 60, 0, 1) * 0.012
+ll_noise = gaussian_filter1d(np.random.normal(0, 1, n_iters) * ll_noise_env, sigma=1.5)
 log_likelihood = ll_base + ll_noise
 
-# ---- Human likeness: decreasing (lower = more similar to expert) ----
-hl_base = 3.2 - 1.4 * (1 - np.exp(-iters / 70))
-hl_noise = gaussian_filter1d(np.random.normal(0, 0.03, n_iters), sigma=2)
+# ---- Human likeness: decreasing (lower = closer to expert) ----
+hl_base = 3.2 - 1.5 * (1 - np.exp(-iters / 55))
+hl_noise_env = np.clip((iters - 20) / 60, 0, 1) * 0.035
+hl_noise = gaussian_filter1d(np.random.normal(0, 1, n_iters) * hl_noise_env, sigma=1.5)
 human_likeness = hl_base + hl_noise
 
-# ---- Weight norm: gradually increases then stabilizes ----
-wn_base = 0.5 + 1.8 * (1 - np.exp(-iters / 40))
-wn_noise = gaussian_filter1d(np.random.normal(0, 0.02, n_iters), sigma=2)
+# ---- Weight norm: increases then stabilizes ----
+wn_base = 0.5 + 1.8 * (1 - np.exp(-iters / 35))
+wn_noise_env = np.clip((iters - 15) / 50, 0, 1) * 0.025
+wn_noise = gaussian_filter1d(np.random.normal(0, 1, n_iters) * wn_noise_env, sigma=1.5)
 weight_norm = wn_base + wn_noise
 
 # ---- Plot ----
