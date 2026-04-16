@@ -13,42 +13,36 @@ n_iters = 200
 iters = np.arange(1, n_iters + 1)
 
 # ---- Train loss ----
-# Phase 1 (0-25): steep near-vertical drop from ~1.61 to ~0.75
-# Phase 2 (25-200): slow convergence to ~0.54
-# Use a two-stage exponential: fast + slow
-train_fast = 0.85 * np.exp(-iters / 6)    # steep drop, dominant in first 25 iters
-train_slow = 0.22 * np.exp(-iters / 80)   # gradual tail
-train_base = 0.30 + train_fast + train_slow
+# Two-stage staircase descent: steep drop → shelf → second drop → smooth convergence
+# Matches reference blue curve shape. Converges to ~0.30.
+drop1 = 1.00 * np.exp(-iters / 5)                         # steep initial drop
+drop2 = 0.25 * np.exp(-np.maximum(iters - 35, 0) / 15)    # delayed second drop
+train_base = 0.30 + drop1 + drop2
 
-# Train noise: sawtooth that fades in gradually over a long ramp (no abrupt onset)
-# Envelope: 0 at iter 0, slowly rises, full amplitude ~iter 80+
-sawtooth_envelope = (1 - np.exp(-iters / 40)) * 0.04  # smooth sigmoid-like ramp
-sawtooth_raw = np.random.uniform(-1, 1, n_iters)
-sawtooth = sawtooth_raw * sawtooth_envelope  # unsmoothed = sharp teeth
+# Bumps concentrated in transition zone (iter 50-130), quiet at start and end
+bump_env = np.exp(-((iters - 80) / 30) ** 2) * 0.035
+train_bumps = gaussian_filter1d(np.random.uniform(-1, 1, n_iters), sigma=0.8) * bump_env
 
-train_loss = train_base + sawtooth
+train_loss = train_base + train_bumps
 
 # ---- Val loss ----
-# Independent smooth curve with low-frequency gentle undulation
-val_fast = 0.78 * np.exp(-iters / 7)
-val_slow = 0.18 * np.exp(-iters / 70)
-val_base = 0.40 + val_fast + val_slow
-
-# Use a separate RNG so val noise is completely independent of train
+# Same two-stage staircase shape, converges to ~0.40
 val_rng = np.random.RandomState(seed=99)
+val_drop1 = 0.90 * np.exp(-iters / 6)
+val_drop2 = 0.20 * np.exp(-np.maximum(iters - 40, 0) / 18)
+val_base = 0.40 + val_drop1 + val_drop2
 
-# Higher frequency sine waves with smaller amplitude
+# Smooth undulation (higher freq, smaller amplitude than before)
 val_wave = (0.010 * np.sin(iters / 2.3 + 1.8)
           + 0.008 * np.sin(iters / 3.7 + 4.0)
           + 0.007 * np.sin(iters / 5.2 + 0.6)
           + 0.006 * np.sin(iters / 7.1 + 2.9)
           + 0.005 * np.sin(iters / 9.8 + 5.1)
           + 0.004 * np.sin(iters / 13.0 + 3.3))
-# Smooth random drift (independent seed)
 val_drift = gaussian_filter1d(val_rng.normal(0, 0.010, n_iters), sigma=3)
 val_loss = val_base + val_wave + val_drift
 
-# Soft guarantee: val stays above train but without copying train's shape
+# Soft guarantee: val stays above train without copying train's shape
 for i in range(n_iters):
     if val_loss[i] < train_base[i] + 0.06:
         val_loss[i] = train_base[i] + 0.06
