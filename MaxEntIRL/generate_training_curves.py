@@ -20,11 +20,18 @@ train_fast = 0.85 * np.exp(-iters / 6)    # steep drop, dominant in first 25 ite
 train_slow = 0.22 * np.exp(-iters / 80)   # gradual tail
 train_base = 0.54 + train_fast + train_slow
 
-# Noise: near-zero during steep phase, gradually increasing in plateau
-noise_envelope = np.clip((iters - 20) / 60, 0, 1) * 0.012  # ramps from 0 to 0.012
+# Noise: near-zero during steep phase, gradually increasing sawtooth in plateau
+noise_envelope = np.clip((iters - 20) / 60, 0, 1) * 0.012
 train_noise = np.random.normal(0, 1, n_iters) * noise_envelope
 train_noise = gaussian_filter1d(train_noise, sigma=1.5)
-train_loss = train_base + train_noise
+
+# Add sawtooth jitter in plateau phase (after iter ~40)
+sawtooth_envelope = np.clip((iters - 40) / 30, 0, 1) * 0.025  # ramps up to 0.025
+sawtooth = np.random.uniform(-1, 1, n_iters) * sawtooth_envelope
+# Keep it jagged (minimal smoothing) for sawtooth look
+sawtooth = gaussian_filter1d(sawtooth, sigma=0.6)
+
+train_loss = train_base + train_noise + sawtooth
 
 # ---- Val loss ----
 # Slightly different start point (a bit lower than train at iter 1)
