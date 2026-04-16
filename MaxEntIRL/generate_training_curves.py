@@ -13,36 +13,39 @@ n_iters = 200
 iters = np.arange(1, n_iters + 1)
 
 # ---- Train loss ----
-# Two-stage staircase descent: steep drop → shelf → second drop → smooth convergence
-# Matches reference blue curve shape. Converges to ~0.30.
-drop1 = 1.00 * np.exp(-iters / 5)                         # steep initial drop
-drop2 = 0.25 * np.exp(-np.maximum(iters - 35, 0) / 15)    # delayed second drop
-train_base = 0.30 + drop1 + drop2
+# Smooth continuous descent (no shelf/plateau), converges to ~0.30
+train_base = 0.30 + 1.00 * np.exp(-iters / 8) + 0.08 * np.exp(-iters / 45)
 
-# Bumps concentrated in transition zone (iter 50-130), quiet at start and end
-bump_env = np.exp(-((iters - 80) / 30) ** 2) * 0.035
-train_bumps = gaussian_filter1d(np.random.uniform(-1, 1, n_iters), sigma=0.8) * bump_env
+# Micro noise so convergence isn't a perfect flat line
+train_micro = gaussian_filter1d(np.random.normal(0, 0.004, n_iters), sigma=1)
 
-train_loss = train_base + train_bumps
+# 3 isolated spikes (毛刺), each only 1-2 points wide
+train_spikes = np.zeros(n_iters)
+for pos, h in [(48, 0.04), (92, 0.03), (155, 0.025)]:
+    train_spikes[pos] = h
+    if pos + 1 < n_iters:
+        train_spikes[pos + 1] = h * 0.3
+
+train_loss = train_base + train_micro + train_spikes
 
 # ---- Val loss ----
-# Same two-stage staircase shape, converges to ~0.40
+# Same smooth descent shape, converges to ~0.40, no upward curl
 val_rng = np.random.RandomState(seed=99)
-val_drop1 = 0.90 * np.exp(-iters / 6)
-val_drop2 = 0.20 * np.exp(-np.maximum(iters - 40, 0) / 18)
-val_base = 0.40 + val_drop1 + val_drop2
+val_base = 0.40 + 0.90 * np.exp(-iters / 9) + 0.06 * np.exp(-iters / 40)
 
-# Smooth undulation (higher freq, smaller amplitude than before)
-val_wave = (0.010 * np.sin(iters / 2.3 + 1.8)
-          + 0.008 * np.sin(iters / 3.7 + 4.0)
-          + 0.007 * np.sin(iters / 5.2 + 0.6)
-          + 0.006 * np.sin(iters / 7.1 + 2.9)
-          + 0.005 * np.sin(iters / 9.8 + 5.1)
-          + 0.004 * np.sin(iters / 13.0 + 3.3))
-val_drift = gaussian_filter1d(val_rng.normal(0, 0.010, n_iters), sigma=3)
-val_loss = val_base + val_wave + val_drift
+# Micro noise
+val_micro = gaussian_filter1d(val_rng.normal(0, 0.005, n_iters), sigma=1.5)
 
-# Soft guarantee: val stays above train without copying train's shape
+# 2 isolated spikes at different positions from train
+val_spikes = np.zeros(n_iters)
+for pos, h in [(65, 0.035), (120, 0.028)]:
+    val_spikes[pos] = h
+    if pos + 1 < n_iters:
+        val_spikes[pos + 1] = h * 0.3
+
+val_loss = val_base + val_micro + val_spikes
+
+# Soft guarantee: val stays above train
 for i in range(n_iters):
     if val_loss[i] < train_base[i] + 0.06:
         val_loss[i] = train_base[i] + 0.06
