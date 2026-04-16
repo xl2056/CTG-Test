@@ -20,37 +20,29 @@ train_fast = 0.85 * np.exp(-iters / 6)    # steep drop, dominant in first 25 ite
 train_slow = 0.22 * np.exp(-iters / 80)   # gradual tail
 train_base = 0.54 + train_fast + train_slow
 
-# Noise: near-zero during steep phase, gradually increasing sawtooth in plateau
-noise_envelope = np.clip((iters - 20) / 60, 0, 1) * 0.012
-train_noise = np.random.normal(0, 1, n_iters) * noise_envelope
-train_noise = gaussian_filter1d(train_noise, sigma=1.5)
+# Noise: near-zero during steep phase, then sharp sawtooth jitter in plateau
+# Large, jagged, per-iteration spikes — no smoothing to keep the teeth sharp
+sawtooth_envelope = np.clip((iters - 25) / 20, 0, 1) * 0.04
+sawtooth = np.random.uniform(-1, 1, n_iters) * sawtooth_envelope  # unsmoothed = sharp teeth
 
-# Add sawtooth jitter in plateau phase (after iter ~40)
-sawtooth_envelope = np.clip((iters - 40) / 30, 0, 1) * 0.025  # ramps up to 0.025
-sawtooth = np.random.uniform(-1, 1, n_iters) * sawtooth_envelope
-# Keep it jagged (minimal smoothing) for sawtooth look
-sawtooth = gaussian_filter1d(sawtooth, sigma=0.6)
-
-train_loss = train_base + train_noise + sawtooth
+train_loss = train_base + sawtooth
 
 # ---- Val loss ----
-# Slightly different start point (a bit lower than train at iter 1)
-# Never crosses train — always above after the first few iters
+# Independent smooth curve, NOT derived from train_loss
 val_fast = 0.78 * np.exp(-iters / 7)
 val_slow = 0.18 * np.exp(-iters / 70)
 val_base = 0.65 + val_fast + val_slow
 
-# Val noise: also ramps up, slightly larger than train
-val_noise_envelope = np.clip((iters - 20) / 50, 0, 1) * 0.018
-val_noise = np.random.normal(0, 1, n_iters) * val_noise_envelope
-val_noise = gaussian_filter1d(val_noise, sigma=1.5)
+# Very gentle, heavily smoothed noise — keeps val looking smooth
+val_noise = np.random.normal(0, 0.008, n_iters)
+val_noise = gaussian_filter1d(val_noise, sigma=5)  # heavy smoothing
 val_loss = val_base + val_noise
 
-# Guarantee: val always >= train (no crossing), with a small natural gap
+# Guarantee: val always above train_base (smooth trend, ignoring train's teeth)
 for i in range(n_iters):
-    min_gap = 0.03 + 0.08 * (1 - np.exp(-i / 30))  # gap grows from 0.03 to ~0.11
-    if val_loss[i] < train_loss[i] + min_gap:
-        val_loss[i] = train_loss[i] + min_gap + abs(np.random.normal(0, 0.003))
+    min_gap = 0.05 + 0.07 * (1 - np.exp(-i / 30))
+    if val_loss[i] < train_base[i] + min_gap:
+        val_loss[i] = train_base[i] + min_gap
 
 # ---- Log-likelihood: mirrors loss (higher = better) ----
 ll_base = -1.15 + 0.55 * (1 - np.exp(-iters / 50))
