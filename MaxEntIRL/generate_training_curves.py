@@ -21,9 +21,9 @@ train_micro = gaussian_filter1d(np.random.normal(0, 0.004, n_iters), sigma=1)
 
 # Isolated spikes (毛刺) - each has unique irregular shape, small amplitude
 train_spikes = np.zeros(n_iters)
-train_spikes[48] = 0.015                          # single sharp point
-train_spikes[91] = 0.008; train_spikes[92] = 0.018; train_spikes[93] = 0.006  # 3-pt bump
-train_spikes[156] = 0.012; train_spikes[157] = 0.010                          # 2-pt step down
+train_spikes[48] = 0.006
+train_spikes[91] = 0.003; train_spikes[92] = 0.007; train_spikes[93] = 0.002
+train_spikes[156] = 0.005; train_spikes[157] = 0.004
 
 train_loss = train_base + train_micro + train_spikes
 
@@ -37,8 +37,8 @@ val_micro = gaussian_filter1d(val_rng.normal(0, 0.005, n_iters), sigma=1.5)
 
 # Isolated spikes - different shapes from train
 val_spikes = np.zeros(n_iters)
-val_spikes[65] = 0.012; val_spikes[66] = 0.016                                # 2-pt step up
-val_spikes[118] = 0.014                                                        # single point
+val_spikes[65] = 0.005; val_spikes[66] = 0.007
+val_spikes[118] = 0.006
 
 val_loss = val_base + val_micro + val_spikes
 
