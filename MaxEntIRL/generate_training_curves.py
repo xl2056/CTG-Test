@@ -34,10 +34,15 @@ val_fast = 0.78 * np.exp(-iters / 7)
 val_slow = 0.18 * np.exp(-iters / 70)
 val_base = 0.65 + val_fast + val_slow
 
-# Low-frequency smooth wave (period ~40-60 iters) — visible but not jagged
-val_wave = 0.04 * np.sin(iters / 10) + 0.03 * np.sin(iters / 17 + 1.3) + 0.02 * np.sin(iters / 27 + 0.7)
-# Smooth random drift, also larger
-val_drift = gaussian_filter1d(np.random.normal(0, 0.025, n_iters), sigma=6)
+# Many overlapping sine waves at different frequencies → natural smooth wobble
+# No single dominant period, avoids the "sharp turn" look of a single sine
+val_wave = (0.015 * np.sin(iters / 4.3 + 0.5)
+          + 0.018 * np.sin(iters / 6.7 + 2.1)
+          + 0.012 * np.sin(iters / 9.1 + 3.7)
+          + 0.010 * np.sin(iters / 13.0 + 1.0)
+          + 0.008 * np.sin(iters / 18.5 + 4.2))
+# Smooth random component on top
+val_drift = gaussian_filter1d(np.random.normal(0, 0.015, n_iters), sigma=3)
 val_loss = val_base + val_wave + val_drift
 
 # Guarantee: val always above train_base (smooth trend, ignoring train's teeth)
