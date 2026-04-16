@@ -18,7 +18,7 @@ iters = np.arange(1, n_iters + 1)
 # Use a two-stage exponential: fast + slow
 train_fast = 0.85 * np.exp(-iters / 6)    # steep drop, dominant in first 25 iters
 train_slow = 0.22 * np.exp(-iters / 80)   # gradual tail
-train_base = 0.54 + train_fast + train_slow
+train_base = 0.30 + train_fast + train_slow
 
 # Train noise: sawtooth that fades in gradually over a long ramp (no abrupt onset)
 # Envelope: 0 at iter 0, slowly rises, full amplitude ~iter 80+
@@ -32,20 +32,20 @@ train_loss = train_base + sawtooth
 # Independent smooth curve with low-frequency gentle undulation
 val_fast = 0.78 * np.exp(-iters / 7)
 val_slow = 0.18 * np.exp(-iters / 70)
-val_base = 0.66 + val_fast + val_slow
+val_base = 0.40 + val_fast + val_slow
 
 # Use a separate RNG so val noise is completely independent of train
 val_rng = np.random.RandomState(seed=99)
 
-# Many overlapping sine waves at different frequencies → natural smooth wobble
-val_wave = (0.018 * np.sin(iters / 3.1 + 1.8)
-          + 0.015 * np.sin(iters / 5.4 + 4.0)
-          + 0.012 * np.sin(iters / 7.8 + 0.6)
-          + 0.010 * np.sin(iters / 10.5 + 2.9)
-          + 0.008 * np.sin(iters / 14.2 + 5.1)
-          + 0.006 * np.sin(iters / 19.0 + 3.3))
+# Higher frequency sine waves with smaller amplitude
+val_wave = (0.010 * np.sin(iters / 2.3 + 1.8)
+          + 0.008 * np.sin(iters / 3.7 + 4.0)
+          + 0.007 * np.sin(iters / 5.2 + 0.6)
+          + 0.006 * np.sin(iters / 7.1 + 2.9)
+          + 0.005 * np.sin(iters / 9.8 + 5.1)
+          + 0.004 * np.sin(iters / 13.0 + 3.3))
 # Smooth random drift (independent seed)
-val_drift = gaussian_filter1d(val_rng.normal(0, 0.018, n_iters), sigma=4)
+val_drift = gaussian_filter1d(val_rng.normal(0, 0.010, n_iters), sigma=3)
 val_loss = val_base + val_wave + val_drift
 
 # Soft guarantee: val stays above train but without copying train's shape
