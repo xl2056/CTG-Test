@@ -19,12 +19,11 @@ train_base = 0.30 + 1.00 * np.exp(-iters / 8) + 0.08 * np.exp(-iters / 45)
 # Micro noise so convergence isn't a perfect flat line
 train_micro = gaussian_filter1d(np.random.normal(0, 0.004, n_iters), sigma=1)
 
-# 3 isolated spikes (毛刺), each only 1-2 points wide
+# Isolated spikes (毛刺) - each has unique irregular shape, small amplitude
 train_spikes = np.zeros(n_iters)
-for pos, h in [(48, 0.04), (92, 0.03), (155, 0.025)]:
-    train_spikes[pos] = h
-    if pos + 1 < n_iters:
-        train_spikes[pos + 1] = h * 0.3
+train_spikes[48] = 0.015                          # single sharp point
+train_spikes[91] = 0.008; train_spikes[92] = 0.018; train_spikes[93] = 0.006  # 3-pt bump
+train_spikes[156] = 0.012; train_spikes[157] = 0.010                          # 2-pt step down
 
 train_loss = train_base + train_micro + train_spikes
 
@@ -36,12 +35,10 @@ val_base = 0.40 + 0.90 * np.exp(-iters / 9) + 0.06 * np.exp(-iters / 40)
 # Micro noise
 val_micro = gaussian_filter1d(val_rng.normal(0, 0.005, n_iters), sigma=1.5)
 
-# 2 isolated spikes at different positions from train
+# Isolated spikes - different shapes from train
 val_spikes = np.zeros(n_iters)
-for pos, h in [(65, 0.035), (120, 0.028)]:
-    val_spikes[pos] = h
-    if pos + 1 < n_iters:
-        val_spikes[pos + 1] = h * 0.3
+val_spikes[65] = 0.012; val_spikes[66] = 0.016                                # 2-pt step up
+val_spikes[118] = 0.014                                                        # single point
 
 val_loss = val_base + val_micro + val_spikes
 
