@@ -20,23 +20,25 @@ train_fast = 0.85 * np.exp(-iters / 6)    # steep drop, dominant in first 25 ite
 train_slow = 0.22 * np.exp(-iters / 80)   # gradual tail
 train_base = 0.54 + train_fast + train_slow
 
-# Noise: near-zero during steep phase, then sharp sawtooth jitter in plateau
-# Large, jagged, per-iteration spikes — no smoothing to keep the teeth sharp
-sawtooth_envelope = np.clip((iters - 25) / 20, 0, 1) * 0.04
-sawtooth = np.random.uniform(-1, 1, n_iters) * sawtooth_envelope  # unsmoothed = sharp teeth
+# Train noise: sawtooth that fades in gradually over a long ramp (no abrupt onset)
+# Envelope: 0 at iter 0, slowly rises, full amplitude ~iter 80+
+sawtooth_envelope = (1 - np.exp(-iters / 40)) * 0.04  # smooth sigmoid-like ramp
+sawtooth_raw = np.random.uniform(-1, 1, n_iters)
+sawtooth = sawtooth_raw * sawtooth_envelope  # unsmoothed = sharp teeth
 
 train_loss = train_base + sawtooth
 
 # ---- Val loss ----
-# Independent smooth curve, NOT derived from train_loss
+# Independent smooth curve with low-frequency gentle undulation
 val_fast = 0.78 * np.exp(-iters / 7)
 val_slow = 0.18 * np.exp(-iters / 70)
 val_base = 0.65 + val_fast + val_slow
 
-# Very gentle, heavily smoothed noise — keeps val looking smooth
-val_noise = np.random.normal(0, 0.008, n_iters)
-val_noise = gaussian_filter1d(val_noise, sigma=5)  # heavy smoothing
-val_loss = val_base + val_noise
+# Low-frequency smooth wave (period ~40-60 iters) — NOT jagged
+val_wave = 0.02 * np.sin(iters / 12) + 0.015 * np.sin(iters / 19 + 1.3)
+# Plus a tiny amount of smooth random drift
+val_drift = gaussian_filter1d(np.random.normal(0, 0.01, n_iters), sigma=8)
+val_loss = val_base + val_wave + val_drift
 
 # Guarantee: val always above train_base (smooth trend, ignoring train's teeth)
 for i in range(n_iters):
