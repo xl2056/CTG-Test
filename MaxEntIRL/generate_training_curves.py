@@ -32,15 +32,16 @@ train_loss = train_base + sawtooth
 # Independent smooth curve with low-frequency gentle undulation
 val_fast = 0.78 * np.exp(-iters / 7)
 val_slow = 0.18 * np.exp(-iters / 70)
-val_base = 0.64 + val_fast + val_slow
+val_base = 0.59 + val_fast + val_slow
 
 # Many overlapping sine waves at different frequencies → natural smooth wobble
 # No single dominant period, avoids the "sharp turn" look of a single sine
-val_wave = (0.015 * np.sin(iters / 4.3 + 0.5)
-          + 0.018 * np.sin(iters / 6.7 + 2.1)
-          + 0.012 * np.sin(iters / 9.1 + 3.7)
-          + 0.010 * np.sin(iters / 13.0 + 1.0)
-          + 0.008 * np.sin(iters / 18.5 + 4.2))
+val_wave = (0.020 * np.sin(iters / 2.8 + 0.5)
+          + 0.018 * np.sin(iters / 4.3 + 2.1)
+          + 0.015 * np.sin(iters / 6.1 + 3.7)
+          + 0.013 * np.sin(iters / 8.5 + 1.0)
+          + 0.010 * np.sin(iters / 11.0 + 4.2)
+          + 0.008 * np.sin(iters / 15.0 + 0.3))
 # Smooth random component on top
 val_drift = gaussian_filter1d(np.random.normal(0, 0.015, n_iters), sigma=3)
 val_loss = val_base + val_wave + val_drift
