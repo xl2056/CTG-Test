@@ -148,7 +148,7 @@ for bar, val in zip(bars_fix, nll_fixed):
     ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02,
              f"{val:.2f}", ha="center", va="bottom", fontsize=9)
 
-ax2.set_ylabel("NLL (lower is better)", fontsize=11)
+ax2.set_ylabel("NLL", fontsize=11)
 ax2.set_title("Expert Trajectory NLL by Scene Category", fontsize=12, fontweight="bold")
 ax2.set_xticks(x)
 ax2.set_xticklabels(scenario_names, fontsize=10)
