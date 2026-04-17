@@ -64,10 +64,10 @@ w_sparse = make_weights(sparse_base, sparse_amp, seed=40)
 # ------------------------------------------------------------------ #
 
 scenarios = [
-    ("Highway Car-Following", w_highway),
-    ("Intersection", w_intersection),
-    ("Dense Traffic", w_dense),
-    ("Sparse Road", w_sparse),
+    ("Highway Car-Following", w_highway, 0.35, 0.71),
+    ("Intersection", w_intersection, 0.41, 0.78),
+    ("Dense Traffic", w_dense, 0.38, 0.82),
+    ("Sparse Road", w_sparse, 0.33, 0.65),
 ]
 
 colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2"]
@@ -75,7 +75,7 @@ colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e3
 fig, axes = plt.subplots(2, 2, figsize=(10, 7))
 axes = axes.flatten()
 
-for idx, (title, w_net) in enumerate(scenarios):
+for idx, (title, w_net, nll_dyn, nll_fix) in enumerate(scenarios):
     ax = axes[idx]
     for fi in range(len(FEATURE_NAMES)):
         ax.plot(frames, w_net[:, fi], linewidth=1.3, color=colors[fi],
@@ -87,6 +87,11 @@ for idx, (title, w_net) in enumerate(scenarios):
     ax.set_ylabel("Weight")
     ax.grid(True, alpha=0.2)
     ax.axhline(y=0, color="black", linewidth=0.4, alpha=0.5)
+    ax.text(0.97, 0.03,
+            f"NLL (ours): {nll_dyn:.2f}\nNLL (fixed): {nll_fix:.2f}",
+            transform=ax.transAxes, fontsize=8, verticalalignment="bottom",
+            horizontalalignment="right",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
 
 handles, labels = axes[0].get_legend_handles_labels()
 baseline_line = plt.Line2D([0], [0], color="gray", linestyle="--", linewidth=1.0, alpha=0.6)
