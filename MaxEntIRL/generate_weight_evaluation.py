@@ -1,5 +1,6 @@
 """Generate simulated weight evaluation plots for demonstration purposes."""
 
+import json
 import os
 import pickle
 import numpy as np
@@ -115,8 +116,21 @@ print(f"Saved to {path1}")
 # ------------------------------------------------------------------ #
 
 scenario_names = ["Highway\nCar-Following", "Intersection", "Dense\nTraffic", "Sparse\nRoad"]
+# Category keys must match the order of scenario_names above
+_CAT_ORDER = ["highway", "intersection", "dense", "sparse"]
+
 nll_dynamic = [0.35, 0.41, 0.38, 0.33]
-nll_fixed =   [0.71, 0.78, 0.82, 0.65]
+
+_nll_json = os.path.join(os.path.dirname(__file__), "irl_output", "fixed_nll_by_category.json")
+if os.path.exists(_nll_json):
+    with open(_nll_json) as _f:
+        _nll_data = json.load(_f)
+    nll_fixed = [_nll_data[c] for c in _CAT_ORDER]
+    print(f"Loaded real fixed-weight NLL: {[round(v, 4) for v in nll_fixed]}")
+else:
+    nll_fixed = [0.71, 0.78, 0.82, 0.65]
+    print("Warning: fixed_nll_by_category.json not found — run compute_fixed_nll.py first."
+          " Using placeholder values.")
 
 x = np.arange(len(scenario_names))
 width = 0.32
