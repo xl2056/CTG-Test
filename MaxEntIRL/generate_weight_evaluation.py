@@ -1,6 +1,7 @@
 """Generate simulated weight evaluation plots for demonstration purposes."""
 
 import os
+import pickle
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -19,8 +20,15 @@ FEATURE_SHORT = ["vel", r"$a_{lon}$", "jerk", r"$a_{lat}$", r"$THW_f$", r"$THW_l
 
 # ------------------------------------------------------------------ #
 # Fixed baseline weights (identical across ALL scenarios)            #
+# Loaded from the real trained legacy-IRL theta.                     #
 # ------------------------------------------------------------------ #
-baseline = np.array([0.05, 0.10, -0.15, 0.10, 0.40, 0.20, 0.15])
+baseline_path = os.path.join(os.path.dirname(__file__), "irl_output", "irl_weights.pkl")
+with open(baseline_path, "rb") as f:
+    _irl_data = pickle.load(f)
+baseline = np.asarray(_irl_data["theta"], dtype=float)
+assert baseline.shape == (len(FEATURE_NAMES),), (
+    f"theta shape {baseline.shape} does not match feature count {len(FEATURE_NAMES)}"
+)
 
 # ------------------------------------------------------------------ #
 # Weight network outputs per scenario                                #
