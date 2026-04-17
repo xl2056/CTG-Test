@@ -152,7 +152,7 @@ def select_representatives(
 
 def load_weight_network(pt_path: str, device: torch.device) -> Tuple[WeightNetwork, Optional[np.ndarray], Optional[np.ndarray]]:
     """Load a saved .pt weight network checkpoint."""
-    ckpt = torch.load(pt_path, map_location=device, weights_only=False)
+    ckpt = torch.load(pt_path, map_location=device)
     wn_cfg = ckpt.get("weight_network_config", {})
     history_frames = ckpt.get("history_num_frames", 20)
     num_steps = wn_cfg.get("num_history_steps", history_frames + 1) if wn_cfg else history_frames + 1
