@@ -16,7 +16,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from .irl_config import FeatureExtractionConfig
 from .weight_network import WeightNetwork
 
 
@@ -281,9 +280,9 @@ def plot_weight_comparison(
 # ------------------------------------------------------------------ #
 
 def main():
-    config = FeatureExtractionConfig()
-    feature_dir = os.path.join(config.output_dir, "features")
-    out_dir = config.output_dir
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    out_dir = os.path.join(_script_dir, "irl_output")
+    feature_dir = os.path.join(out_dir, "features")
 
     # --- Classify scenes ---
     print("Classifying scenes...")
