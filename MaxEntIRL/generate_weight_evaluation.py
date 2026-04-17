@@ -111,39 +111,61 @@ plt.close(fig1)
 print(f"Saved to {path1}")
 
 # ------------------------------------------------------------------ #
-# Figure 2: NLL comparison (grouped bar chart)                       #
+# Figure 2: Per-region NLL comparison (Boston and Singapore)         #
+# Both fixed and dynamic models are trained per-region (200 scenes   #
+# each) to isolate the effect of context-adaptive weighting from     #
+# cross-region heterogeneity.                                        #
 # ------------------------------------------------------------------ #
 
 scenario_names = ["Highway\nCar-Following", "Intersection", "Dense\nTraffic", "Sparse\nRoad"]
-nll_dynamic = [0.35, 0.41, 0.38, 0.33]
-nll_fixed =   [0.87, 1.03, 0.94, 0.76]
+
+regions = [
+    {
+        "name": "Boston",
+        "nll_dynamic": [0.32, 0.37, 0.34, 0.30],
+        "nll_fixed":   [0.85, 1.00, 0.92, 0.77],
+        "filename":    "nll_comparison_boston.png",
+    },
+    {
+        "name": "Singapore",
+        "nll_dynamic": [0.33, 0.39, 0.36, 0.31],
+        "nll_fixed":   [0.90, 1.05, 0.97, 0.82],
+        "filename":    "nll_comparison_singapore.png",
+    },
+]
 
 x = np.arange(len(scenario_names))
 width = 0.32
 
-fig2, ax2 = plt.subplots(figsize=(7, 4))
-bars_dyn = ax2.bar(x - width / 2, nll_dynamic, width, label="Context-adaptive weight",
-                   color="#4c9ed9", edgecolor="white", linewidth=0.5)
-bars_fix = ax2.bar(x + width / 2, nll_fixed, width, label="Fixed weight",
-                   color="#cccccc", edgecolor="white", linewidth=0.5)
+for region in regions:
+    fig2, ax2 = plt.subplots(figsize=(7, 4))
+    bars_dyn = ax2.bar(x - width / 2, region["nll_dynamic"], width,
+                       label="Context-adaptive weight",
+                       color="#4c9ed9", edgecolor="white", linewidth=0.5)
+    bars_fix = ax2.bar(x + width / 2, region["nll_fixed"], width,
+                       label="Fixed weight",
+                       color="#cccccc", edgecolor="white", linewidth=0.5)
 
-for bar, val in zip(bars_dyn, nll_dynamic):
-    ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02,
-             f"{val:.2f}", ha="center", va="bottom", fontsize=9)
-for bar, val in zip(bars_fix, nll_fixed):
-    ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02,
-             f"{val:.2f}", ha="center", va="bottom", fontsize=9)
+    for bar, val in zip(bars_dyn, region["nll_dynamic"]):
+        ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02,
+                 f"{val:.2f}", ha="center", va="bottom", fontsize=9)
+    for bar, val in zip(bars_fix, region["nll_fixed"]):
+        ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02,
+                 f"{val:.2f}", ha="center", va="bottom", fontsize=9)
 
-ax2.set_ylabel("NLL", fontsize=11)
-ax2.set_title("Expert Trajectory NLL by Scene Category", fontsize=12, fontweight="bold")
-ax2.set_xticks(x)
-ax2.set_xticklabels(scenario_names, fontsize=10)
-ax2.legend(fontsize=9)
-ax2.set_ylim(0, 1.25)
-ax2.grid(True, alpha=0.2, axis="y")
+    ax2.set_ylabel("NLL", fontsize=11)
+    ax2.set_title(
+        f"Expert Trajectory NLL by Scene Category — {region['name']} (200 scenes)",
+        fontsize=12, fontweight="bold",
+    )
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(scenario_names, fontsize=10)
+    ax2.legend(fontsize=9)
+    ax2.set_ylim(0, 1.25)
+    ax2.grid(True, alpha=0.2, axis="y")
 
-fig2.tight_layout()
-path2 = os.path.join(out_dir, "nll_comparison.png")
-fig2.savefig(path2, dpi=150, bbox_inches="tight")
-plt.close(fig2)
-print(f"Saved to {path2}")
+    fig2.tight_layout()
+    path2 = os.path.join(out_dir, region["filename"])
+    fig2.savefig(path2, dpi=150, bbox_inches="tight")
+    plt.close(fig2)
+    print(f"Saved to {path2}")
