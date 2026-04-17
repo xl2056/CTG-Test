@@ -197,23 +197,36 @@ def context_to_torch(context: Dict[str, np.ndarray], device: torch.device) -> Di
 
 
 def infer_weights_for_scene(
-    net: WeightNetwork, scene_data: List[dict], device: torch.device
+    net: WeightNetwork, scene_data: List[dict], device: torch.device,
+    scene_name: str = "",
 ) -> np.ndarray:
     """Run weight network on every frame of a scene.
 
     Returns: (num_frames, 7) array of weight vectors.
     """
     weights = []
+    n_ctx = 0
+    n_no_ctx = 0
     with torch.no_grad():
         for frame_entry in scene_data:
             ctx = frame_entry.get("context")
             if ctx is None:
                 weights.append(np.zeros(len(FEATURE_NAMES)))
+                n_no_ctx += 1
                 continue
+            n_ctx += 1
             ctx_t = context_to_torch(ctx, device)
             w = net(ctx_t).cpu().numpy().squeeze()
             weights.append(w)
-    return np.array(weights)
+    arr = np.array(weights) if weights else np.zeros((0, len(FEATURE_NAMES)))
+    print(f"  [{scene_name}] frames={len(scene_data)}, with_context={n_ctx}, "
+          f"no_context={n_no_ctx}, weight_shape={arr.shape}")
+    if arr.size > 0:
+        print(f"    weight range: min={arr.min():.4f}, max={arr.max():.4f}, "
+              f"mean={arr.mean():.4f}")
+        if n_ctx > 0:
+            print(f"    first frame context keys: {list(scene_data[0].get('context', {}).keys())}")
+    return arr
 
 
 # ------------------------------------------------------------------ #
@@ -242,7 +255,9 @@ def plot_weight_comparison(
 
     for col, cat in enumerate(cats_present):
         scene_name, scene_data = representatives[cat]
-        w_arr = infer_weights_for_scene(net, scene_data, device)
+        w_arr = infer_weights_for_scene(net, scene_data, device, scene_name)
+        if w_arr.shape[0] == 0:
+            continue
         frames = np.arange(1, len(w_arr) + 1)
 
         ax = axes[0, col]
