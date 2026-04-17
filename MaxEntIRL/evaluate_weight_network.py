@@ -234,56 +234,71 @@ def infer_weights_for_scene(
 # ------------------------------------------------------------------ #
 
 def plot_weight_comparison(
-    representatives: Dict[str, Tuple[str, List[dict]]],
+    classified: Dict[str, List[Tuple[str, Dict[str, float], List[dict]]]],
     net: WeightNetwork,
     fixed_weights: Optional[np.ndarray],
     device: torch.device,
     save_path: str,
 ):
-    """Generate comparison figure: weight network vs fixed weights."""
-    cats_present = [c for c in CATEGORIES if c in representatives]
+    """Generate bar chart comparison: weight network output per category."""
+    cats_present = [c for c in CATEGORIES if classified.get(c)]
     n_cats = len(cats_present)
     if n_cats == 0:
-        print("No representative scenes found. Nothing to plot.")
+        print("No scenes found. Nothing to plot.")
         return
 
+    # Collect mean weight per category (average across all scenes & frames)
+    cat_weights = {}
+    cat_stds = {}
+    for cat in cats_present:
+        all_w = []
+        for scene_name, stats, scene_data in classified[cat]:
+            w_arr = infer_weights_for_scene(net, scene_data, device, scene_name)
+            if w_arr.shape[0] > 0:
+                all_w.append(w_arr)
+        if all_w:
+            stacked = np.concatenate(all_w, axis=0)
+            cat_weights[cat] = stacked.mean(axis=0)
+            cat_stds[cat] = stacked.std(axis=0)
+        else:
+            cat_weights[cat] = np.zeros(len(FEATURE_NAMES))
+            cat_stds[cat] = np.zeros(len(FEATURE_NAMES))
+
     n_rows = 2 if fixed_weights is not None else 1
-    fig, axes = plt.subplots(n_rows, n_cats, figsize=(4.5 * n_cats, 3.5 * n_rows),
-                             squeeze=False)
+    fig, axes = plt.subplots(n_rows, 1, figsize=(10, 4 * n_rows), squeeze=False)
 
-    colors = plt.cm.tab10(np.linspace(0, 1, len(FEATURE_NAMES)))
+    x = np.arange(len(FEATURE_NAMES))
+    width = 0.8 / n_cats
+    colors = plt.cm.Set2(np.linspace(0, 0.8, n_cats))
+    short_labels = ["vel", "a_lon", "jerk", "a_lat", "f_thw", "l_thw", "r_thw"]
 
-    for col, cat in enumerate(cats_present):
-        scene_name, scene_data = representatives[cat]
-        w_arr = infer_weights_for_scene(net, scene_data, device, scene_name)
-        if w_arr.shape[0] == 0:
-            continue
-        frames = np.arange(1, len(w_arr) + 1)
+    # Top: weight network output per category
+    ax = axes[0, 0]
+    for i, cat in enumerate(cats_present):
+        offset = (i - n_cats / 2 + 0.5) * width
+        bars = ax.bar(x + offset, cat_weights[cat], width, yerr=cat_stds[cat],
+                      label=CATEGORY_LABELS[cat], color=colors[i],
+                      capsize=3, error_kw={"linewidth": 0.8})
+    ax.set_xticks(x)
+    ax.set_xticklabels(short_labels)
+    ax.set_ylabel("Weight Value")
+    ax.set_title("Weight Network Output by Scene Category")
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3, axis="y")
+    ax.axhline(y=0, color="black", linewidth=0.5)
 
-        ax = axes[0, col]
-        for fi, fname in enumerate(FEATURE_NAMES):
-            ax.plot(frames, w_arr[:, fi], linewidth=1.2, color=colors[fi], label=fname)
-        ax.set_title(f"{CATEGORY_LABELS[cat]}\n({scene_name})", fontsize=9)
-        ax.set_xlabel("Frame")
-        if col == 0:
-            ax.set_ylabel("Weight (network)")
-        ax.grid(True, alpha=0.3)
+    # Bottom: fixed weights (if available)
+    if fixed_weights is not None:
+        ax2 = axes[1, 0]
+        ax2.bar(x, fixed_weights, 0.5, color="gray", alpha=0.7)
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(short_labels)
+        ax2.set_ylabel("Weight Value")
+        ax2.set_title("Fixed Weights (same for all scenarios)")
+        ax2.grid(True, alpha=0.3, axis="y")
+        ax2.axhline(y=0, color="black", linewidth=0.5)
 
-        if fixed_weights is not None:
-            ax_fix = axes[1, col]
-            for fi, fname in enumerate(FEATURE_NAMES):
-                ax_fix.axhline(y=fixed_weights[fi], linewidth=1.2, color=colors[fi], label=fname)
-            ax_fix.set_xlabel("Frame")
-            ax_fix.set_xlim(frames[0], frames[-1])
-            if col == 0:
-                ax_fix.set_ylabel("Weight (fixed)")
-            ax_fix.set_title("Fixed Weights", fontsize=9)
-            ax_fix.grid(True, alpha=0.3)
-
-    handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", ncol=len(FEATURE_NAMES),
-               fontsize=7, bbox_to_anchor=(0.5, 1.02))
-    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    fig.tight_layout()
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -338,7 +353,7 @@ def main():
 
     # --- Visualize ---
     save_path = os.path.join(out_dir, "weight_evaluation.png")
-    plot_weight_comparison(representatives, net, fixed_weights, device, save_path)
+    plot_weight_comparison(classified, net, fixed_weights, device, save_path)
 
 
 if __name__ == "__main__":
