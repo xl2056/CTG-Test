@@ -34,14 +34,23 @@ from trajdata import AgentType, UnifiedDataset
 from trajdata.visualization.vis import plot_scene_batch
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, _SCRIPT_DIR)
 
-from evaluate_weight_network import (  # noqa: E402
-    CATEGORIES,
-    CATEGORY_LABELS,
-    classify_all_scenes,
-    select_representatives,
-)
+try:
+    from .evaluate_weight_network import (
+        CATEGORIES,
+        CATEGORY_LABELS,
+        classify_all_scenes,
+        select_representatives,
+    )
+except ImportError:
+    # Direct execution: python3 MaxEntIRL/render_typical_scenes.py
+    sys.path.insert(0, os.path.dirname(_SCRIPT_DIR))
+    from MaxEntIRL.evaluate_weight_network import (
+        CATEGORIES,
+        CATEGORY_LABELS,
+        classify_all_scenes,
+        select_representatives,
+    )
 
 
 def build_dataset(data_split: str, nuscenes_path: str,
